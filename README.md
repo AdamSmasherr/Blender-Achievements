@@ -15,11 +15,11 @@ Steam, Xbox, and PlayStation.
      generated https://github.com/user-attachments/... URL and paste it here.
      Close the issue draft without submitting — the upload stays valid. -->
 
-![Xbox-style notification: a green banner with a trophy icon reading "Achievement unlocked — Donut Master"](REPLACE_WITH_XBOX_SCREENSHOT_URL)
+![Xbox-style notification: a green banner with a trophy icon reading "Achievement unlocked — Donut Master"](<img width="342" height="74" alt="Image" src="https://github.com/user-attachments/assets/e5f7c3ef-df63-45e3-aa80-07cedf59b13c" />)
 
-![Steam-style notification for a rare achievement: a dark card with a gold glowing icon reading "Domino Effect — Run a Rigid Body simulation with over 100 objects."](REPLACE_WITH_STEAM_SCREENSHOT_URL)
+![Steam-style notification for a rare achievement: a dark card with a gold glowing icon reading "Domino Effect — Run a Rigid Body simulation with over 100 objects."]<img width="557" height="133" alt="Image" src="https://github.com/user-attachments/assets/690936d6-e532-452d-95fe-68e4b1f4aefd" />)
 
-![PlayStation-style notification: a dark gradient card reading "Know your Place — Trophy earned!"](REPLACE_WITH_PLAYSTATION_SCREENSHOT_URL)
+![PlayStation-style notification: a dark gradient card reading "Know your Place — Trophy earned!"](<img width="673" height="134" alt="Image" src="https://github.com/user-attachments/assets/76b9aa5f-aad4-419c-8be5-c7a9e9333c5d" />)
 - **Сustomization**: mix any animation style with your own sound files,
 per-slot and master volume control. Export/import profiles as JSON to move them between machines.
 - Runs entirely off Blender’s own Python API — no external dependencies,
