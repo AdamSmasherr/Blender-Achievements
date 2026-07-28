@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.zip
+.agents/
+
+# Screenshots for the README are hosted on GitHub's CDN, not committed here.
+image.png
+image-*.png

@@ -1,0 +1,27 @@
+schema_version = "1.0.0"
+
+id = "achievements"
+version = "1.0.0"
+name = "Blender Achievements"
+tagline = "Steam / Xbox / PlayStation-style achievement pop-ups for Blender"
+maintainer = "art1kaxD <press39902@gmail.com>"
+type = "add-on"
+
+website = "https://github.com/yourname/achievements"
+
+tags = ["System", "3D View"]
+
+blender_version_min = "4.4.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+copyright = [
+  "2026 the Blender Achievements authors",
+]
+
+[permissions]
+# Max 64 characters (enforced by `blender --command extension validate`).
+# The file lives in the user config dir, not the addon folder.
+files = "Save unlocked achievements and stats to the config folder"
