@@ -7,7 +7,6 @@ A native Blender addon that gamifies your workflow with achievements. 79 achieve
 - **79 achievements**  - session-scoped (things you do
 *this* session) and global/cumulative (persisted totals across all time).
 - **Three pop-up animation styles**, each with its own sound profile:
-Steam, Xbox, and PlayStation.
 
 <!-- The screenshots below are hosted on GitHub's CDN rather than committed to
      this repo. To (re)generate the links: open any issue on this repository,
@@ -15,8 +14,11 @@ Steam, Xbox, and PlayStation.
      generated https://github.com/user-attachments/... URL and paste it here.
      Close the issue draft without submitting — the upload stays valid. -->
 
-<img width="342" height="74" alt="Image" src="https://github.com/user-attachments/assets/e5f7c3ef-df63-45e3-aa80-07cedf59b13c" />
-<img width="557" height="133" alt="Image" src="https://github.com/user-attachments/assets/690936d6-e532-452d-95fe-68e4b1f4aefd" />
+**Xbox**<br>
+<img width="684" height="148" alt="Image" src="https://github.com/user-attachments/assets/e5f7c3ef-df63-45e3-aa80-07cedf59b13c" /><br>
+**Steam**<br>
+<img width="557" height="133" alt="Image" src="https://github.com/user-attachments/assets/690936d6-e532-452d-95fe-68e4b1f4aefd" /><br>
+**PlayStation**<br>
 <img width="673" height="134" alt="Image" src="https://github.com/user-attachments/assets/76b9aa5f-aad4-419c-8be5-c7a9e9333c5d" />
 
 
