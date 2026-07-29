@@ -75,7 +75,6 @@ STACK_SHIFT_T = 0.25   # тривалість анімації зсуву сте
 STEAM_RISE_PX = 90     # наскільки виїжджає знизу / йде вгору при зникненні
 STEAM_MAX_VISIBLE = 4  # максимум карток одночасно; решта чекає в черзі
 STEAM_GAP_T = 0.5      # пауза між появою сусідніх ачивок
-STEAM_SOUND_DELAY = 3.0  # затримка звуку розблокування відносно появи картки
 
 # --- PlayStation: та сама картка, але на 15% нижча, градієнт зліва направо ---
 PS_H_FACTOR = 0.85
@@ -1293,10 +1292,6 @@ def _activate(item, now, style):
     _toasts.append(item)
     _last_spawn = now
 
-    # Steam: звук лунає із затримкою відносно появи картки.
-    if style == 'STEAM' and not item.get('sound'):
-        item['sound_at'] = now + STEAM_SOUND_DELAY
-        return
     if item.get('sound'):
         _play_sound(item['sound'])
     else:
@@ -1306,13 +1301,6 @@ def _activate(item, now, style):
 def _tick():
     now = time.monotonic()
     style = _get_style()
-
-    # 0) відкладений звук розблокування (Steam)
-    for t in _toasts:
-        at = t.get('sound_at')
-        if at is not None and now >= at:
-            t['sound_at'] = None
-            _play_slot('rare_unlock' if t.get('rare') else 'unlock')
 
     # 1) звук "закінчення" + зняття померлих тостів (у кожного свій таймер)
     for t in list(_toasts):

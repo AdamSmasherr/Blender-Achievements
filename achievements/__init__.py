@@ -22,7 +22,7 @@ _on_depsgraph = achievements.on_depsgraph_update
 bl_info = {
     "name": "Blender Achievements",
     "author": "Blender Community",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (4, 4, 0),
     "location": "View3D > Sidebar (N) > Achievements",
     "description": "Native zero-dependency achievement tracking and viewport notifications for Blender.",
