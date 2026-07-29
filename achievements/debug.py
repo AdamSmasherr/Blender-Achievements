@@ -12,7 +12,7 @@ import traceback
 
 import bpy
 
-_ADDON_PKG = __package__.split(".")[0] if __package__ else "achievements"
+_ADDON_PKG = __package__ or "achievements"
 
 
 def is_enabled() -> bool:

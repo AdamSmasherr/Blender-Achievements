@@ -286,7 +286,7 @@ def stop_all():
 
 def _get_prefs():
     try:
-        addon = __package__.split('.')[0] if __package__ else "achievements"
+        addon = __package__ or "achievements"
         prefs = getattr(bpy.context, "preferences", None)
         if prefs and hasattr(prefs, "addons") and addon in prefs.addons:
             return prefs.addons[addon].preferences

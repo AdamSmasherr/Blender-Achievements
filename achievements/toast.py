@@ -1345,7 +1345,7 @@ def _tick():
 def get_preferences():
     """Returns AddonPreferences for achievements if registered."""
     try:
-        addon_name = __package__.split('.')[0] if __package__ else "achievements"
+        addon_name = __package__ or "achievements"
         prefs = getattr(bpy.context, "preferences", None)
         if prefs and hasattr(prefs, "addons") and addon_name in prefs.addons:
             return prefs.addons[addon_name].preferences
