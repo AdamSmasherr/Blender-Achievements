@@ -73,7 +73,7 @@ animation style + your own sound files per slot). Use **Export Profiles** /
 | **Flat Earth** | Work in the UV Editing tab for over 30 minutes straight. |
 | **Subdiv Overkill** | Set Subdivision Surface viewport/render level to 6 or higher. |
 | **Up is Down** | Recalculate or flip inverted normals on a mesh. |
-| **Surgical Precision** | Make over 50 manual cuts using the Knife tool in one session. |
+| **Surgical Precision** | Make 20 cuts with the Knife tool in one session. |
 | **Singularity** | Merge over 100 overlapping vertices using Merge by Distance. |
 | **N-gon Criminal** | Create a single face with 10 or more sides. |
 
@@ -124,7 +124,7 @@ animation style + your own sound files per slot). Use **Export Profiles** /
 | **Back from the dead** ⭐ | Successfully restore a project via Recover Auto Save after a crash. |
 | **Living on the Edge** | Work on a complex scene for over 2 hours without saving (Ctrl+S). |
 | **Add-on Collector** | Enable over 25 add-ons in the preferences. |
-| **Shortcut Ninja** ⭐ | Use 30 different keyboard shortcuts in a minute without opening mouse menus. |
+| **Shortcut Ninja** ⭐ | Use 15 different keyboard shortcuts within one minute. |
 | **Know your Place** | Apply scale, rotation, and location (Ctrl+A) on 20+ objects in a scene. |
 | **Outliner Chaos** | Maintain 47+ auto-named objects (Cube.001, Cube.002) without renaming. |
 | **Paranoia** | Save your project manually over 50 times in a single session. |

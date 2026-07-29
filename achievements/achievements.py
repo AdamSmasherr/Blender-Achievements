@@ -99,7 +99,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     "KNIFE_MASTER": AchievementDefinition(
         id="KNIFE_MASTER",
         title="Surgical Precision",
-        description="Make over 50 manual cuts using the Knife tool in one session.",
+        description="Make 20 cuts with the Knife tool in one session.",
         rare=False,
         category="Modeling & Sculpting",
     ),
@@ -122,7 +122,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     "PURE_PROCEDURAL": AchievementDefinition(
         id="PURE_PROCEDURAL",
         title="Pure Procedural",
-        description="Create a material without using any external image textures.",
+        description="Build a material from 10+ nodes without a single image texture.",
         rare=False,
         category="Nodes & Materials",
     ),
@@ -303,7 +303,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     "SHORTCUT_NINJA": AchievementDefinition(
         id="SHORTCUT_NINJA",
         title="Shortcut Ninja",
-        description="Use 30 different keyboard shortcuts in a minute without opening mouse menus.",
+        description="Use 15 different keyboard shortcuts within one minute.",
         rare=True,
         category="Workflow & Disasters",
     ),
@@ -571,7 +571,7 @@ FRAME_CHANGE_ACHIEVEMENT_IDS = {
 }
 
 RENDER_PRE_ACHIEVEMENT_IDS = {
-    "RESPECT_THE_CUBE", "DONUT_MASTER", "PURE_PROCEDURAL",
+    "RESPECT_THE_CUBE", "DONUT_MASTER",
     "DENOISE_MAGIC", "CYCLES_ENTHUSIAST", "ALPHA_TRANSLUCENCY"
 }
 
@@ -637,7 +637,7 @@ def record_knife_cut(count: int = 1):
     eng = get_engine()
     if not eng.is_unlocked("KNIFE_MASTER"):
         _knife_cut_count += count
-        if _knife_cut_count >= 50:
+        if _knife_cut_count >= 20:
             eng.unlock("KNIFE_MASTER")
 
 
@@ -691,7 +691,7 @@ def record_shortcut_used(shortcut_id: str):
         _shortcut_timestamps.append((now, shortcut_id))
         _shortcut_timestamps = [(t, sid) for t, sid in _shortcut_timestamps if now - t <= 60.0]
         unique_shortcuts = {sid for _, sid in _shortcut_timestamps}
-        if len(unique_shortcuts) >= 30:
+        if len(unique_shortcuts) >= 15:
             eng.unlock("SHORTCUT_NINJA")
 
 
@@ -712,22 +712,24 @@ def trigger_vram_error():
         eng.unlock("VRAM_VICTIM")
 
 
-# --- Background Operator Watcher ---
-# Деякі ачивки (Frankenstein/join, Surgical Precision/knife, Singularity/
-# merge by distance, Time Traveler/undo, Shortcut Ninja, Know your Place/
-# apply transform, Graph Editor Tweaker, Let it cook/bake, Up is Down/normals)
-# неможливо визначити зі стану сцени — потрібно бачити САМІ оператори.
-# Blender не дає прямого "оператор виконано" хендлера в стабільному API,
-# тож користуємось `bpy.context.window_manager.operators` — це список усіх
-# операторів, викликаних за сесію (те саме джерело, що живить F6/Redo-панель).
-# Невидимий модальний оператор (ACHIEVEMENT_OT_watcher, __init__.py) щотік
-# викликає watcher_tick(), а на кожен PRESS — watcher_key_event().
+# --- Background Keyboard Watcher ---
+# УВАГА: раніше тут жив опитувач `bpy.context.window_manager.operators`, який
+# мав ловити виклики операторів. Він не працює і працювати не може:
+# wm_operator_register() у Blender обмежує цей список константою
+# MAX_OP_REGISTERED і ЗВІЛЬНЯЄ найстаріші записи з голови, додаючи нові в
+# хвіст. Тобто довжина списку перестає рости після перших ~10 операторів
+# сесії, а вся логіка будувалась на "len() виріс — значить є нові". Після
+# заповнення списку детектор сліпнув назавжди. До того ж туди потрапляють
+# лише оператори з прапорцем REGISTER, викликані через подієву систему, —
+# ed.undo і модальний knife не потрапляють взагалі.
+#
+# Тому операції тепер визначаються за ЗМІНОЮ СТАНУ сцени у
+# depsgraph_update_post (див. _detect_operations нижче) та штатними
+# хендлерами undo_post / blend_import_post. Модальний оператор лишився
+# виключно заради клавіатури — там події справжні, і це працює.
 
 _watcher_running = False
 _watcher_instance_active = False  # True, поки жива МОДАЛЬНА копія оператора
-_watcher_last_op_count = None    # None = baseline ще не зафіксовано
-_watcher_prev_obj_count = None
-_watcher_mesh_stats = {}         # ob.name -> (vert_count, edge_count)
 
 _SHORTCUT_IGNORE_TYPES = {
     'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'NONE', 'WINDOW_DEACTIVATE',
@@ -736,10 +738,6 @@ _SHORTCUT_IGNORE_TYPES = {
     'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'WHEELINMOUSE', 'WHEELOUTMOUSE',
     'TIMER', 'TIMER0', 'TIMER1', 'TIMER2', 'TIMER_JOBS', 'TIMER_AUTOSAVE', 'TIMER_REPORT',
 }
-
-_BAKE_OP_IDS = {'ptcache.bake_all', 'ptcache.bake', 'fluid.bake_all', 'fluid.bake_data'}
-_GRAPH_TRANSFORM_OP_IDS = {'transform.translate', 'transform.transform',
-                          'transform.rotate', 'transform.resize'}
 
 
 def start_watcher():
@@ -790,136 +788,216 @@ def watcher_key_event(event):
         pass
 
 
-def _mesh_edit_stats(ob):
-    """(vert_count, edge_count) активного меша (edit або object mode) або None."""
+# --- Детекція операцій за зміною стану сцени ---
+# Заміна непрацездатного опитувача wm.operators (див. коментар вище).
+# Кожна операція впізнається за характерним «слідом», який вона лишає:
+#
+#   join            к-сть об'єктів впала, а СУМА вершин збереглась
+#   delete (Purge)  к-сть об'єктів впала РАЗОМ із сумою вершин
+#   merge           у меша впала к-сть вершин без видалення об'єктів
+#   cut             у меша в Edit Mode зросли і вершини, і ребра
+#   apply transform трансформ об'єкта став одиничним, а меш змінився
+#   flip normals    змінився знак орієнтації полігонів меша
+#
+# Розрізнення join і delete за сумою вершин — принципове: раніше об'єднання
+# 100 об'єктів через Ctrl+J зараховувало The Purge замість Frankenstein.
+
+_op_prev_obj_count = None      # к-сть об'єктів на попередньому оновленні
+_op_prev_total_verts = None    # сума вершин по всіх мешах
+_op_mesh_counts = {}           # mesh.name -> (verts, edges)
+_op_mesh_orient = {}           # mesh.name -> знак орієнтації (+1/-1)
+_op_xform_identity = {}        # ob.name -> чи був трансформ одиничним
+_op_bake_state = {}            # "object/modifier" -> чи був кеш запечений
+
+
+def _graph_editor_open() -> bool:
     try:
-        me = ob.data
-        if ob.mode == 'EDIT':
+        for w in bpy.context.window_manager.windows:
+            for a in w.screen.areas:
+                if a.type == 'GRAPH_EDITOR':
+                    return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+def _total_mesh_verts() -> int:
+    """Сума вершин мешів, ПРИВ'ЯЗАНИХ до об'єктів.
+
+    Свідомо не рахуємо bpy.data.meshes: після видалення об'єктів їхні меші
+    ще лишаються осиротілими в файлі, сума не падає — і видалення виглядало
+    б як join (геометрія ніби збереглась). Рахунок по об'єктах падає одразу.
+    """
+    return sum(len(ob.data.vertices) for ob in bpy.data.objects
+               if ob.type == 'MESH' and ob.data)
+
+
+def _mesh_counts(me):
+    """(verts, edges) меша; в Edit Mode читаємо живий bmesh, бо me.vertices
+    там ще не оновлений."""
+    try:
+        ob = bpy.context.active_object
+        if (ob is not None and ob.mode == 'EDIT' and ob.type == 'MESH'
+                and ob.data is me):
             import bmesh
             bm = bmesh.from_edit_mesh(me)
             return (len(bm.verts), len(bm.edges))
         return (len(me.vertices), len(me.edges))
     except Exception as _dbg_err:
-        debug.log("achievements.py:805", _dbg_err)
+        debug.log("achievements.py:_mesh_counts", _dbg_err)
         return None
 
 
-def _is_graph_editor_context(context) -> bool:
+def _mesh_orientation(me):
+    """Знак орієнтації полігонів (+1 назовні / -1 всередину) або None.
+
+    Рахуємо суму dot(нормаль, центр) по полігонах: перевертання нормалей
+    міняє напрямок обходу петель, а отже й знак цієї суми. Дає дешевий
+    спосіб побачити Shift+N / flip без доступу до самого оператора.
+    """
     try:
-        screen = getattr(context, "screen", None)
-        areas = getattr(screen, "areas", None) if screen else None
-        return bool(areas) and any(getattr(a, "type", None) == 'GRAPH_EDITOR' for a in areas)
+        n = len(me.polygons)
+        if n == 0:
+            return None
+        import numpy as np
+        nor = np.empty(n * 3, dtype=np.float32)
+        cen = np.empty(n * 3, dtype=np.float32)
+        me.polygons.foreach_get("normal", nor)
+        me.polygons.foreach_get("center", cen)
+        s = float(np.dot(nor, cen))
+        if abs(s) < 1e-6:
+            return None
+        return 1 if s > 0 else -1
     except Exception as _dbg_err:
-        debug.log("achievements.py:814", _dbg_err)
+        debug.log("achievements.py:_mesh_orientation", _dbg_err)
+        return None
+
+
+def _is_identity_transform(ob) -> bool:
+    try:
+        return (tuple(round(v, 4) for v in ob.location) == (0.0, 0.0, 0.0)
+                and tuple(round(v, 4) for v in ob.scale) == (1.0, 1.0, 1.0)
+                and all(abs(v) < 1e-4 for v in ob.rotation_euler))
+    except Exception:  # noqa: BLE001
         return False
 
 
-def _scene_has_fluid_domain(scene) -> bool:
-    """Чи є в сцені FLUID-модифікатор типу Domain (щоб не плутати з cloth/rigid bake)."""
+def _detect_operations(scene, depsgraph):
+    """Впізнає виконані операції за різницею стану. Викликається з
+    depsgraph_update_post. Сканує лише меші, які depsgraph позначив
+    зміненими, тож вартість не залежить від розміру сцени."""
+    global _op_prev_obj_count, _op_prev_total_verts
+
+    from .engine import get_engine
+    eng = get_engine()
+
+    # ---- об'єкти: join проти масового видалення
+    try:
+        cur_objs = len(bpy.data.objects)
+        cur_verts = _total_mesh_verts()
+        if _op_prev_obj_count is not None:
+            gone = _op_prev_obj_count - cur_objs
+            if gone > 0:
+                lost = (_op_prev_total_verts or 0) - cur_verts
+                # join зберігає геометрію (втрати < 5% від наявної),
+                # видалення забирає її разом з об'єктами
+                joined = lost <= max(8, int(cur_verts * 0.05))
+                if joined:
+                    record_object_join(count=gone + 1)
+                elif gone >= 100 and not eng.is_unlocked("THE_PURGE"):
+                    eng.unlock("THE_PURGE")
+        _op_prev_obj_count = cur_objs
+        _op_prev_total_verts = cur_verts
+    except Exception as _dbg_err:
+        debug.log("achievements.py:_detect_operations/objects", _dbg_err)
+
+    # ---- меші: merge / cut / flip normals
+    try:
+        changed = []
+        for upd in getattr(depsgraph, "updates", ()):
+            idp = getattr(upd, "id", None)
+            if idp is None or not getattr(upd, "is_updated_geometry", False):
+                continue
+            orig = getattr(idp, "original", idp)
+            if isinstance(orig, bpy.types.Mesh):
+                changed.append(orig)
+            elif isinstance(orig, bpy.types.Object) and orig.type == 'MESH' and orig.data:
+                changed.append(orig.data)
+
+        for me in changed:
+            cur = _mesh_counts(me)
+            if cur is None:
+                continue
+            prev = _op_mesh_counts.get(me.name)
+            _op_mesh_counts[me.name] = cur
+
+            if prev is not None:
+                d_v = cur[0] - prev[0]
+                d_e = cur[1] - prev[1]
+                # злиття вершин: вершин поменшало, об'єкти не зникали
+                if d_v < 0 and _op_prev_obj_count == len(bpy.data.objects):
+                    record_merge_by_distance(delta_vertices=-d_v)
+                # розріз: додались і вершини, і ребра
+                elif d_v > 0 and d_e > 0:
+                    record_knife_cut(count=1)
+
+            if not eng.is_unlocked("INVERTED_REALITY"):
+                sign = _mesh_orientation(me)
+                if sign is not None:
+                    prev_sign = _op_mesh_orient.get(me.name)
+                    _op_mesh_orient[me.name] = sign
+                    if prev_sign is not None and prev_sign != sign:
+                        record_normals_flipped()
+    except Exception as _dbg_err:
+        debug.log("achievements.py:_detect_operations/meshes", _dbg_err)
+
+    # ---- правки кривих у Graph Editor
+    try:
+        if not eng.is_unlocked("GRAPH_EDITOR_TWEAKER") and _graph_editor_open():
+            for upd in getattr(depsgraph, "updates", ()):
+                idp = getattr(upd, "id", None)
+                orig = getattr(idp, "original", idp) if idp is not None else None
+                if isinstance(orig, bpy.types.Action):
+                    record_graph_tweak(count=1)
+                    break
+    except Exception as _dbg_err:
+        debug.log("achievements.py:_detect_operations/graph", _dbg_err)
+
+    # ---- завершені бейки фізики (Let it cook / Bake Sale)
     try:
         for ob in scene.objects:
-            if ob.type != 'MESH':
-                continue
-            for mod in ob.modifiers:
-                if getattr(mod, "type", "") == 'FLUID' and getattr(mod, "fluid_type", "") == 'DOMAIN':
-                    return True
+            for mod in getattr(ob, "modifiers", ()):
+                cache = (getattr(getattr(mod, "domain_settings", None), "point_cache", None)
+                         or getattr(mod, "point_cache", None))
+                if cache is None:
+                    continue
+                key = f"{ob.name}/{mod.name}"
+                baked = bool(getattr(cache, "is_baked", False))
+                was = _op_bake_state.get(key)
+                _op_bake_state[key] = baked
+                if baked and was is False:
+                    frames = int(getattr(cache, "frame_end", scene.frame_end)) - \
+                             int(getattr(cache, "frame_start", scene.frame_start))
+                    record_bake(frame_count=max(0, frames))
     except Exception as _dbg_err:
-        debug.log("achievements.py:827", _dbg_err)
-        pass
-    return False
+        debug.log("achievements.py:_detect_operations/bake", _dbg_err)
 
-
-def _dispatch_watched_operator(idname, context, cur_obj_count, cur_mesh_stats, ob):
-    global _watcher_prev_obj_count
+    # ---- застосування трансформу (Ctrl+A)
     try:
-        if idname == 'object.join':
-            # object.join зводить N виділених об'єктів до 1 — дельта загальної
-            # к-сті об'єктів у сцені = N-1, тож N = delta+1.
-            delta = _watcher_prev_obj_count - cur_obj_count
-            if delta > 0:
-                record_object_join(count=delta + 1)
-
-        elif idname in ('mesh.flip_normals', 'mesh.normals_make_consistent'):
-            record_normals_flipped()
-
-        elif idname == 'mesh.knife_tool':
-            if ob is not None and cur_mesh_stats is not None:
-                prev = _watcher_mesh_stats.get(ob.name)
-                if prev is not None:
-                    d_edges = cur_mesh_stats[1] - prev[1]
-                    if d_edges > 0:
-                        record_knife_cut(count=d_edges)
-
-        elif idname == 'mesh.remove_doubles':
-            if ob is not None and cur_mesh_stats is not None:
-                prev = _watcher_mesh_stats.get(ob.name)
-                if prev is not None:
-                    d_verts = prev[0] - cur_mesh_stats[0]
-                    if d_verts > 0:
-                        record_merge_by_distance(delta_vertices=d_verts)
-
-        elif idname in _GRAPH_TRANSFORM_OP_IDS:
-            if _is_graph_editor_context(context):
-                record_graph_tweak(count=1)
-
-        elif idname == 'object.transform_apply':
-            count = len(getattr(context, "selected_objects", None) or [])
-            if count > 0:
-                record_transform_apply(count=count)
-
-        elif idname in _BAKE_OP_IDS:
-            scene = context.scene
-            if scene is not None and _scene_has_fluid_domain(scene):
-                frame_count = int(scene.frame_end) - int(scene.frame_start)
-                if frame_count > 0:
-                    record_bake(frame_count=frame_count)
-
-        elif idname == 'ed.undo':
-            record_undo()
+        if not eng.is_unlocked("APPLY_ALL"):
+            applied = 0
+            for ob in scene.objects:
+                if ob.type != 'MESH':
+                    continue
+                now_id = _is_identity_transform(ob)
+                was_id = _op_xform_identity.get(ob.name)
+                _op_xform_identity[ob.name] = now_id
+                if was_id is False and now_id:
+                    applied += 1
+            if applied:
+                record_transform_apply(count=applied)
     except Exception as _dbg_err:
-        debug.log("achievements.py:879", _dbg_err)
-        pass
-
-
-def watcher_tick(context):
-    """Періодична (TIMER, ~5 Гц) перевірка нових операторів та стану меша.
-
-    Перший виклик лише фіксує baseline (щоб уся операторська історія
-    ДО старту сесії не була раптово оброблена як "нова" і не зарахувала
-    ачивки заднім числом).
-    """
-    global _watcher_last_op_count, _watcher_prev_obj_count, _watcher_mesh_stats
-    if not _watcher_running:
-        return
-    try:
-        wm = context.window_manager
-        ops = wm.operators
-        n = len(ops)
-
-        cur_obj_count = len(bpy.data.objects)
-        if _watcher_prev_obj_count is None:
-            _watcher_prev_obj_count = cur_obj_count
-
-        ob = context.active_object
-        cur_mesh_stats = _mesh_edit_stats(ob) if ob is not None and ob.type == 'MESH' else None
-
-        if _watcher_last_op_count is None:
-            _watcher_last_op_count = n
-        elif n > _watcher_last_op_count:
-            for op in ops[_watcher_last_op_count:n]:
-                idname = getattr(op, "bl_idname", "") or ""
-                _dispatch_watched_operator(idname, context, cur_obj_count, cur_mesh_stats, ob)
-            _watcher_last_op_count = n
-        elif n < _watcher_last_op_count:
-            # список могли обрізати/скинути (напр. новий файл) — просто ребазуємось
-            _watcher_last_op_count = n
-
-        _watcher_prev_obj_count = cur_obj_count
-        if ob is not None and cur_mesh_stats is not None:
-            _watcher_mesh_stats[ob.name] = cur_mesh_stats
-    except Exception as _dbg_err:
-        debug.log("achievements.py:919", _dbg_err)
-        pass
+        debug.log("achievements.py:_detect_operations/xform", _dbg_err)
 
 
 # --- Object Snapshot Utilities ---
@@ -1054,8 +1132,19 @@ def _count_total_shapekeys() -> int:
 
 
 def _count_compositor_nodes() -> int:
-    return sum(len(sc.node_tree.nodes) for sc in bpy.data.scenes
-              if getattr(sc, "node_tree", None))
+    """К-сть нод компоузера в усіх сценах.
+
+    У Blender 5.x дерево компоузера переїхало з scene.node_tree у
+    scene.compositing_node_group (scene.node_tree там уже не існує, а
+    scene.use_nodes позначено deprecated до 6.0). Перевіряємо обидва, щоб
+    працювало і на 4.4, і на 5.x.
+    """
+    total = 0
+    for sc in bpy.data.scenes:
+        tree = getattr(sc, "compositing_node_group", None) or getattr(sc, "node_tree", None)
+        if tree is not None:
+            total += len(tree.nodes)
+    return total
 
 
 def _accum_delta(eng, stat_key: str, current: int):
@@ -1175,6 +1264,10 @@ def on_depsgraph_update(scene, depsgraph):
     global _prev_object_count, _idle_seconds
     _idle_seconds = 0    # будь-яка зміна сцени = активність (скидає таймер безділля)
 
+    # Операції (join / merge / cut / apply / flip normals) впізнаються за
+    # різницею стану — раніше це робив непрацездатний опитувач wm.operators.
+    _detect_operations(scene, depsgraph)
+
     # Top-level short-circuit коли все, що дає depsgraph (включно з глобальними
     # лічильниками кубів/мавп та The Purge / N-gon), вже отримано.
     if (all(eng.is_unlocked(aid) for aid in DEPSGRAPH_ACHIEVEMENT_IDS) and
@@ -1240,11 +1333,9 @@ def on_depsgraph_update(scene, depsgraph):
 
     # 1b. THE_PURGE — масове видалення 100+ об'єктів за одну операцію
     try:
-        cur_obj_count = len(bpy.data.objects)
-        if not eng.is_unlocked("THE_PURGE"):
-            if _prev_object_count is not None and (_prev_object_count - cur_obj_count) >= 100:
-                eng.unlock("THE_PURGE")
-        _prev_object_count = cur_obj_count
+        # The Purge тепер видається у _detect_operations(): там є перевірка
+        # суми вершин, яка відрізняє справжнє видалення від Ctrl+J.
+        _prev_object_count = len(bpy.data.objects)
     except Exception as _dbg_err:
         debug.log("achievements.py:1241", _dbg_err)
         pass
@@ -1440,8 +1531,9 @@ def _scene_render_candidates(scene):
             debug.log("achievements.py:1420", _dbg_err)
             pass
 
-    # PURE_PROCEDURAL
-    if not eng.is_unlocked("PURE_PROCEDURAL"):
+    # PURE_PROCEDURAL — перенесено в achievement_timer_callback, бо ця умова
+    # перевіряється зі стану сцени і не має сенсу чекати на рендер
+    if False:
         try:
             for ob in scene.objects:
                 if ob.type == 'MESH' and ob.data:
@@ -1775,6 +1867,37 @@ def on_load_post(dummy):
 
 
 @persistent
+def on_undo_post(scene, _extra=None):
+    """Штатний хендлер скасування дії.
+
+    Раніше undo намагався ловити опитувач wm.operators, куди ed.undo взагалі
+    не потрапляє (оператор не має прапорця REGISTER — скасування не можна
+    «повторити»). bpy.app.handlers.undo_post дає це напряму.
+    """
+    try:
+        record_undo()
+    except Exception as _dbg_err:
+        debug.log("achievements.py:on_undo_post", _dbg_err)
+
+
+@persistent
+def on_blend_import_post(_a=None, _b=None):
+    """Append / Link даних з іншого .blend.
+
+    Точний хендлер замість самопального пошуку датаблоків з бібліотекою:
+    той спрацьовував лише на Link (append копіює дані й посилання на
+    бібліотеку не лишає), тому Append не зараховувався взагалі.
+    """
+    try:
+        from .engine import get_engine
+        eng = get_engine()
+        if not eng.is_unlocked("APPEND_ICITIS"):
+            eng.unlock("APPEND_ICITIS")
+    except Exception as _dbg_err:
+        debug.log("achievements.py:on_blend_import_post", _dbg_err)
+
+
+@persistent
 def on_frame_change_post(scene):
     global _idle_seconds
     _idle_seconds = 0    # відтворення/зміна кадру = активність
@@ -1981,6 +2104,22 @@ def achievement_timer_callback():
             debug.log("achievements.py:1804", _dbg_err)
             pass
 
+    # 2b. PURE_PROCEDURAL — матеріал із 10+ нод і без жодної image-текстури.
+    # Раніше перевірялось лише при завершенні рендеру, тож без F12 ачивку
+    # не можна було отримати взагалі.
+    if not eng.is_unlocked("PURE_PROCEDURAL"):
+        try:
+            for mat in bpy.data.materials:
+                tree = getattr(mat, "node_tree", None)
+                if tree is None or len(tree.nodes) < 10:
+                    continue
+                if not any(n.type in {'TEX_IMAGE', 'TEX_ENVIRONMENT'} for n in tree.nodes):
+                    eng.unlock("PURE_PROCEDURAL")
+                    break
+        except Exception as _dbg_err:
+            debug.log("achievements.py:PURE_PROCEDURAL", _dbg_err)
+            pass
+
     # 3. SAVED_BY_SHIELD — дельта fake-user понад baseline (призначено цієї сесії)
     if not eng.is_unlocked("SAVED_BY_SHIELD") and _baseline is not None:
         try:
@@ -2082,7 +2221,8 @@ def reset_tracking_state():
     global _max_join_count, _max_merge_count, _progress_cache, _progress_cache_time
     global _knife_cut_count, _graph_tweaks, _applied_objects_count
     global _last_depsgraph_heavy_scan_time, _last_depsgraph_node_sig
-    global _watcher_last_op_count, _watcher_prev_obj_count, _watcher_mesh_stats
+    global _op_prev_obj_count, _op_prev_total_verts, _op_mesh_counts
+    global _op_mesh_orient, _op_xform_identity, _op_bake_state
 
     _known_objects = None
     _launch_time = time.time()
@@ -2107,9 +2247,12 @@ def reset_tracking_state():
     _delta_last.clear()
     _ngon_cache.clear()
 
-    _watcher_last_op_count = None
-    _watcher_prev_obj_count = None
-    _watcher_mesh_stats = {}
+    _op_prev_obj_count = None
+    _op_prev_total_verts = None
+    _op_mesh_counts = {}
+    _op_mesh_orient = {}
+    _op_xform_identity = {}
+    _op_bake_state = {}
 
     _knife_cut_count = 0
     _graph_tweaks = 0
@@ -2135,6 +2278,8 @@ def register_listeners():
         (on_render_complete, bpy.app.handlers.render_complete),
         (on_render_cancel, bpy.app.handlers.render_cancel),
         (on_frame_change_post, bpy.app.handlers.frame_change_post),
+        (on_undo_post, bpy.app.handlers.undo_post),
+        (on_blend_import_post, bpy.app.handlers.blend_import_post),
     ):
         if handler not in app_list:
             app_list.append(handler)
@@ -2180,6 +2325,8 @@ def unregister_listeners():
         (on_render_complete, bpy.app.handlers.render_complete),
         (on_render_cancel, bpy.app.handlers.render_cancel),
         (on_frame_change_post, bpy.app.handlers.frame_change_post),
+        (on_undo_post, bpy.app.handlers.undo_post),
+        (on_blend_import_post, bpy.app.handlers.blend_import_post),
     ):
         if handler in app_list:
             app_list.remove(handler)
@@ -2213,7 +2360,7 @@ PROGRESSIVE_TARGETS = {
     "ADDON_COLLECTOR": 25,
     "POLYGON_KING": 10000000,
     "FATAL_CTRL_J": 100,
-    "KNIFE_MASTER": 50,
+    "KNIFE_MASTER": 20,
     "MERGE_MASTER": 100,
     "NODE_SPAGHETTI": 50,
     "GEOMETRY_NODES_GURU": 5,
@@ -2227,7 +2374,7 @@ PROGRESSIVE_TARGETS = {
     "CYCLES_ENTHUSIAST": 10000,
     "EEVEE_SPEEDSTER": 100,
     "CTRL_Z_HERO": 50,
-    "SHORTCUT_NINJA": 30,
+    "SHORTCUT_NINJA": 15,
     "APPLY_ALL": 20,
     "OUTLINER_CHAOS": 47,
     "SAVE_BUTTON_MASHER": 50,

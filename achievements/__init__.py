@@ -22,7 +22,7 @@ _on_depsgraph = achievements.on_depsgraph_update
 bl_info = {
     "name": "Blender Achievements",
     "author": "Blender Community",
-    "version": (1, 0, 2),
+    "version": (1, 0, 3),
     "blender": (4, 4, 0),
     "location": "View3D > Sidebar (N) > Achievements",
     "description": "Native zero-dependency achievement tracking and viewport notifications for Blender.",
@@ -37,11 +37,10 @@ SOUND_PATH = os.path.join(_ADDON_DIR, "assets", "standart.wav")
 
 class ACHIEVEMENT_OT_watcher(bpy.types.Operator):
     """Invisible always-on modal operator. Never consumes input (always
-    PASS_THROUGH) — it only observes operator calls (via
-    window_manager.operators) and keyboard presses so achievements that
-    can't be detected from scene state alone (join, knife cuts, undo,
-    keyboard shortcuts, transform-apply, graph-editor tweaks, fluid bakes)
-    can still be tracked."""
+    PASS_THROUGH) — it exists solely to see key presses, which is the one
+    thing no handler exposes. Everything else (joins, cuts, merges, undo,
+    applied transforms) is recognised from scene state or dedicated
+    handlers, see achievements.py."""
     bl_idname = "achievement.watcher"
     bl_label = "Achievement Background Watcher"
     bl_options = {'INTERNAL'}
@@ -52,9 +51,7 @@ class ACHIEVEMENT_OT_watcher(bpy.types.Operator):
         if not achievements.is_watcher_running():
             return self._stop(context)
 
-        if event.type == 'TIMER':
-            achievements.watcher_tick(context)
-        elif event.value == 'PRESS':
+        if event.value == 'PRESS':
             achievements.watcher_key_event(event)
 
         return {'PASS_THROUGH'}
@@ -62,9 +59,9 @@ class ACHIEVEMENT_OT_watcher(bpy.types.Operator):
     def invoke(self, context, event):
         if not achievements.watcher_instance_start():
             return {'CANCELLED'}   # інша копія вже працює
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.2, window=context.window)
-        wm.modal_handler_add(self)
+        # Таймер більше не потрібен: опитування операторів прибрано, лишились
+        # тільки клавіатурні події, які приходять самі.
+        context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
     def _stop(self, context):
