@@ -173,7 +173,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     "BONE_COLLECTOR": AchievementDefinition(
         id="BONE_COLLECTOR",
         title="Exoskeleton",
-        description="Build an armature rig containing 75 or more bones.",
+        description="Build an armature rig containing 100 or more bones.",
         rare=False,
         category="Animation & Physics",
     ),
@@ -736,7 +736,7 @@ _watcher_heartbeat = 0.0          # час останньої побаченої
 # у Blender), прапорець вище лишався б True назавжди — і watcher_instance_start()
 # блокував би будь-який новий запуск. Тому вважаємо копію мертвою, якщо вона
 # давно не бачила подій, і дозволяємо перезапуск.
-_WATCHER_STALE_AFTER = 90.0
+_WATCHER_STALE_AFTER = 15.0
 
 _SHORTCUT_IGNORE_TYPES = {
     'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'NONE', 'WINDOW_DEACTIVATE',
@@ -789,6 +789,12 @@ def watcher_needs_launch() -> bool:
 def watcher_instance_stop():
     global _watcher_instance_active
     _watcher_instance_active = False
+
+
+def watcher_heartbeat():
+    """Позначка, що модальна копія жива (шлеться раз на секунду)."""
+    global _watcher_heartbeat
+    _watcher_heartbeat = time.time()
 
 
 def watcher_key_event(event):
@@ -900,6 +906,17 @@ def _mesh_counts(me):
         return None
 
 
+def _editing_mesh():
+    """Меш, який зараз у режимі редагування, або None."""
+    try:
+        ob = bpy.context.active_object
+        if ob is not None and ob.type == 'MESH' and ob.mode == 'EDIT':
+            return ob.data
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _mesh_orientation(me):
     """Знак орієнтації полігонів (+1 назовні / -1 всередину) або None.
 
@@ -1000,12 +1017,34 @@ def _detect_operations(scene, depsgraph):
                 elif d_v > 0 and d_e > 0:
                     record_knife_cut(count=1)
 
-            if not eng.is_unlocked("INVERTED_REALITY") and not resync:
+            # Орієнтацію міряємо ЛИШЕ поза Edit Mode: me.polygons під час
+            # редагування застарілий, тож у едіті ми бачили стан ДО правки, а
+            # після виходу — після неї. Два такі заміри з однаковими
+            # лічильниками виглядали як перевертання нормалей, і extrude з
+            # наступним merge by distance хибно давав ачивку.
+            if (not eng.is_unlocked("INVERTED_REALITY") and not resync
+                    and me is not _editing_mesh()):
                 sign = _mesh_orientation(me)
                 if sign is not None:
-                    prev_sign = _op_mesh_orient.get(me.name)
-                    _op_mesh_orient[me.name] = sign
-                    if prev_sign is not None and prev_sign != sign:
+                    # Запам'ятовуємо орієнтацію РАЗОМ із лічильниками того ж
+                    # заміру. Лічильники оновлюються і в Edit Mode, а
+                    # орієнтація — ні, тож порівняння з "поточними" даними
+                    # зіставляло різні моменти часу.
+                    prev_rec = _op_mesh_orient.get(me.name)
+                    _op_mesh_orient[me.name] = (sign, cur)
+                    prev_sign = prev_rec[0] if prev_rec else None
+                    prev_counts = prev_rec[1] if prev_rec else None
+                    # Знак орієнтації змінюється від будь-якої суттєвої зміни
+                    # геометрії, а не лише від перевертання: extrude з наступним
+                    # merge by distance теж його перевертав і давав хибну
+                    # ачивку. Перевертання нормалей НЕ додає і НЕ прибирає
+                    # геометрію, тож зараховуємо лише коли к-сть вершин і ребер
+                    # не змінилась.
+                    # Перевертання нормалей не змінює к-сть геометрії, тож
+                    # зараховуємо лише коли лічильники ідентичні тим, за яких
+                    # знято попередню орієнтацію.
+                    if (prev_sign is not None and prev_sign != sign
+                            and prev_counts == cur):
                         record_normals_flipped()
         if changed and not eng.is_unlocked("N_GON_CRIMINAL"):
             if _scan_changed_for_ngon(changed):
@@ -1579,7 +1618,7 @@ def on_depsgraph_update(scene, depsgraph):
         try:
             for ob in bpy.data.objects:
                 if ob.type == 'ARMATURE' and ob.data and _is_new('objects', ob.name):
-                    if len(ob.data.bones) > 50 or (getattr(ob, "mode", "") == 'EDIT' and hasattr(ob.data, "edit_bones") and len(ob.data.edit_bones) > 50):
+                    if len(ob.data.bones) >= 100 or (getattr(ob, "mode", "") == 'EDIT' and hasattr(ob.data, "edit_bones") and len(ob.data.edit_bones) >= 100):
                         eng.unlock("BONE_COLLECTOR")
                         break
         except Exception as _dbg_err:
@@ -2509,7 +2548,7 @@ PROGRESSIVE_TARGETS = {
     "MATERIAL_HOARDER": 30,
     "COLOR_RAMP_ADDICT": 5,
     "GRAPH_EDITOR_TWEAKER": 100,
-    "BONE_COLLECTOR": 75,
+    "BONE_COLLECTOR": 100,
     "DRIVER_SPECIALIST": 5,
     "GRAVITY_MASTER": 100,
     "PARTICLE_STORM": 100000,

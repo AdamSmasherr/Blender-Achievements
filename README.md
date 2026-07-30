@@ -94,7 +94,7 @@ animation style + your own sound files per slot). Use **Export Profiles** /
 | Achievement | Description |
 | --- | --- |
 | **Graph Editor Tweaker** | Adjust over 100 keyframe interpolation handles in the Graph Editor. |
-| **Exoskeleton** | Build an armature rig containing 75 or more bones. |
+| **Exoskeleton** | Build an armature rig containing 100 or more bones. |
 | **Driver Specialist** | Create 5 custom Python drivers linking object properties. |
 | **Domino Effect** ⭐ | Run a Rigid Body simulation with over 100 objects. |
 | **Let it cook** | Bake a fluid or smoke simulation longer than 250 frames. |

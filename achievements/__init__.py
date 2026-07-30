@@ -22,7 +22,7 @@ _on_depsgraph = achievements.on_depsgraph_update
 bl_info = {
     "name": "Achievements",
     "author": "art1kaxD",
-    "version": (1, 0, 4),
+    "version": (1, 0, 5),
     "blender": (4, 4, 0),
     "location": "View3D > Sidebar (N) > Achievements",
     "description": "Native zero-dependency achievement tracking and viewport notifications for Blender.",
@@ -51,7 +51,13 @@ class ACHIEVEMENT_OT_watcher(bpy.types.Operator):
         if not achievements.is_watcher_running():
             return self._stop(context)
 
-        if event.value == 'PRESS':
+        if event.type == 'TIMER':
+            # Пульс: доводить, що копія жива. Без нього "живість" мірялась
+            # натисканнями клавіш, і після 90 с тиші watcher вважався мертвим —
+            # запускалась ДРУГА копія, далі третя, і кожна рахувала ті самі
+            # натискання повторно.
+            achievements.watcher_heartbeat()
+        elif event.value == 'PRESS':
             achievements.watcher_key_event(event)
 
         return {'PASS_THROUGH'}
@@ -59,9 +65,13 @@ class ACHIEVEMENT_OT_watcher(bpy.types.Operator):
     def invoke(self, context, event):
         if not achievements.watcher_instance_start():
             return {'CANCELLED'}   # інша копія вже працює
-        # Таймер більше не потрібен: опитування операторів прибрано, лишились
-        # тільки клавіатурні події, які приходять самі.
-        context.window_manager.modal_handler_add(self)
+        wm = context.window_manager
+        win = context.window or (wm.windows[0] if wm.windows else None)
+        if win is None:
+            achievements.watcher_instance_stop()
+            return {'CANCELLED'}
+        self._timer = wm.event_timer_add(1.0, window=win)
+        wm.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
     def _stop(self, context):
@@ -90,7 +100,13 @@ def _launch_watcher():
         # перезавантаженні файлу. Тому таймер не одноразовий: він періодично
         # перевіряє, чи копія жива, і за потреби піднімає нову.
         if achievements.watcher_needs_launch():
-            bpy.ops.achievement.watcher('INVOKE_DEFAULT')
+            # Запуск обов'язково у контексті вікна: у callback таймера
+            # context.window буває None, і тоді modal_handler_add чіпляє
+            # обробник у нікуди — клавіші до нього не доходять.
+            wm = bpy.context.window_manager
+            if wm.windows:
+                with bpy.context.temp_override(window=wm.windows[0]):
+                    bpy.ops.achievement.watcher('INVOKE_DEFAULT')
     except Exception:
         pass
     return 30.0
