@@ -20,9 +20,9 @@ _on_depsgraph = achievements.on_depsgraph_update
 
 
 bl_info = {
-    "name": "Blender Achievements",
-    "author": "Blender Community",
-    "version": (1, 0, 3),
+    "name": "Achievements",
+    "author": "art1kaxD",
+    "version": (1, 0, 4),
     "blender": (4, 4, 0),
     "location": "View3D > Sidebar (N) > Achievements",
     "description": "Native zero-dependency achievement tracking and viewport notifications for Blender.",
@@ -77,7 +77,7 @@ class ACHIEVEMENT_OT_watcher(bpy.types.Operator):
 
 
 def _launch_watcher():
-    """Одноразовий bpy.app.timers callback: запускає модальний watcher.
+    """Періодичний bpy.app.timers callback: тримає модальний watcher живим.
 
     invoke() модального оператора потребує готового UI-контексту (вікна),
     якого немає під час register() — тому старт відкладається на трохи
@@ -86,10 +86,14 @@ def _launch_watcher():
     try:
         if not achievements.is_watcher_running():
             return None
-        bpy.ops.achievement.watcher('INVOKE_DEFAULT')
+        # Модальна копія може загинути не через _stop() — наприклад при
+        # перезавантаженні файлу. Тому таймер не одноразовий: він періодично
+        # перевіряє, чи копія жива, і за потреби піднімає нову.
+        if achievements.watcher_needs_launch():
+            bpy.ops.achievement.watcher('INVOKE_DEFAULT')
     except Exception:
-        return 0.5
-    return None
+        pass
+    return 30.0
 
 
 def _init_preset_sound_paths():

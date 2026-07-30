@@ -116,7 +116,7 @@ XBOX_BANNER_MAX = 620.0 # стеля, щоб дуже довгий опис не
 XBOX_TEXT_PAD = 26.0    # правий відступ тексту в банері
 
 # ------------------------------------------------------------------ стан модуля
-_queue = []
+_pending = []
 _toasts = []           # активні тости (Steam може мати кілька одночасно)
 _draw_handle = None
 _shader_uniform = None
@@ -1322,21 +1322,21 @@ def _tick():
                         other['slot_t0'] = now
 
     # 2) запуск нових
-    if _queue:
+    if _pending:
         if style == 'STEAM':
             # Steam: паралельно, але не більше STEAM_MAX_VISIBLE карток і не
             # частіше ніж раз на STEAM_GAP_T — решта чекає в черзі.
             if (len(_toasts) < STEAM_MAX_VISIBLE
                     and (now - _last_spawn) >= STEAM_GAP_T):
-                _activate(_queue.pop(0), now, style)
+                _activate(_pending.pop(0), now, style)
         else:
             # Xbox / PlayStation: строго по черзі, одна за одною.
             if not _toasts:
-                _activate(_queue.pop(0), now, style)
+                _activate(_pending.pop(0), now, style)
 
     _redraw_all()
 
-    if _toasts or _queue:
+    if _toasts or _pending:
         return 1.0 / 60.0
     return None
 
@@ -1378,10 +1378,10 @@ def _unload_fonts():
 
 
 def remove_handler():
-    global _draw_handle, _queue, _shader_uniform, _shader_smooth
+    global _draw_handle, _pending, _shader_uniform, _shader_smooth
     global _shader_conic, _shader_radial, _shader_image_tint, _mask_tex, _mask_failed
     global _aud_device, _aud_handle, _asset_tex, _last_spawn
-    _queue.clear()
+    _pending.clear()
     _toasts.clear()
     _asset_tex = {}
     _last_spawn = 0.0
@@ -1448,7 +1448,7 @@ def show(title, desc, rare=False, icon_path=None, sound_path=None,
             debug.log("toast.py:1419", _dbg_err)
             icon_img = None
 
-    _queue.append({
+    _pending.append({
         'title': title,
         'desc': desc,
         'rare': bool(rare),

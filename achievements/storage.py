@@ -4,10 +4,10 @@ Handles saving and loading achievement unlock states to a JSON file.
 """
 
 import contextlib
+import itertools
 import json
 import os
 import time
-import threading
 import bpy
 
 from . import debug
@@ -23,6 +23,11 @@ try:
     _HAS_FCNTL = True
 except ImportError:
     _HAS_FCNTL = False
+
+
+# Робить ім'я тимчасового файлу унікальним у межах процесу; разом з PID цього
+# досить, щоб два екземпляри Blender не перетерли тимчасовий файл один одному.
+_TMP_COUNTER = itertools.count()
 
 
 @contextlib.contextmanager
@@ -169,7 +174,7 @@ class AchievementStorage:
         temp_fp = None
         try:
             os.makedirs(os.path.dirname(fp), exist_ok=True)
-            temp_fp = f"{fp}.{os.getpid()}_{threading.get_ident()}.tmp"
+            temp_fp = f"{fp}.{os.getpid()}_{next(_TMP_COUNTER)}.tmp"
             with open(temp_fp, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
 

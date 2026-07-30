@@ -173,7 +173,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     "BONE_COLLECTOR": AchievementDefinition(
         id="BONE_COLLECTOR",
         title="Exoskeleton",
-        description="Build an armature rig containing over 50 bones.",
+        description="Build an armature rig containing 75 or more bones.",
         rare=False,
         category="Animation & Physics",
     ),
@@ -224,7 +224,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     "CYCLES_ENTHUSIAST": AchievementDefinition(
         id="CYCLES_ENTHUSIAST",
         title="Cinema Quality",
-        description="Set render samples above 10,000.",
+        description="Finish a render with the sample count set above 10,000.",
         rare=False,
         category="Lighting & Rendering",
     ),
@@ -730,6 +730,13 @@ def trigger_vram_error():
 
 _watcher_running = False
 _watcher_instance_active = False  # True, поки жива МОДАЛЬНА копія оператора
+_watcher_heartbeat = 0.0          # час останньої побаченої події
+
+# Якщо модальна копія гине не через _stop() (перезавантаження файлу, виняток
+# у Blender), прапорець вище лишався б True назавжди — і watcher_instance_start()
+# блокував би будь-який новий запуск. Тому вважаємо копію мертвою, якщо вона
+# давно не бачила подій, і дозволяємо перезапуск.
+_WATCHER_STALE_AFTER = 90.0
 
 _SHORTCUT_IGNORE_TYPES = {
     'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'NONE', 'WINDOW_DEACTIVATE',
@@ -756,14 +763,27 @@ def is_watcher_running() -> bool:
     return _watcher_running
 
 
+def watcher_is_stale() -> bool:
+    """True, якщо позначена активною копія давно не подавала ознак життя."""
+    if not _watcher_instance_active:
+        return False
+    return (time.time() - _watcher_heartbeat) > _WATCHER_STALE_AFTER
+
+
 def watcher_instance_start() -> bool:
     """Захист від подвійного запуску modal-оператора (напр. швидке
     вимкнути/увімкнути аддон). True — можна стартувати; False — вже є жива копія."""
-    global _watcher_instance_active
-    if _watcher_instance_active:
+    global _watcher_instance_active, _watcher_heartbeat
+    if _watcher_instance_active and not watcher_is_stale():
         return False
     _watcher_instance_active = True
+    _watcher_heartbeat = time.time()
     return True
+
+
+def watcher_needs_launch() -> bool:
+    """Чи треба піднімати нову модальну копію."""
+    return (not _watcher_instance_active) or watcher_is_stale()
 
 
 def watcher_instance_stop():
@@ -772,6 +792,8 @@ def watcher_instance_stop():
 
 
 def watcher_key_event(event):
+    global _watcher_heartbeat
+    _watcher_heartbeat = time.time()
     """Реєструє клавіатурний шорткат для Shortcut Ninja (лише клавіатура,
     без відкриття мишею меню — тому клавіші миші й колесо виключені)."""
     if not _watcher_running:
@@ -808,6 +830,36 @@ _op_mesh_counts = {}           # mesh.name -> (verts, edges)
 _op_mesh_orient = {}           # mesh.name -> знак орієнтації (+1/-1)
 _op_xform_identity = {}        # ob.name -> чи був трансформ одиничним
 _op_bake_state = {}            # "object/modifier" -> чи був кеш запечений
+_op_resync = False             # True -> наступний прохід лише перезаписує базу
+_op_graph_sig = None           # підпис ключів анімації (Graph Editor Tweaker)
+_op_graph_last = 0.0           # час останнього зарахованого руху ключа
+
+
+def _keyframe_signature():
+    """Дешевий підпис положень ключів усіх дій, або None якщо ключів немає.
+
+    Кількість ключів + сума їхніх координат: цього досить, щоб побачити
+    зсув ключа, і не треба обходити кожен хендл окремо.
+    """
+    try:
+        import numpy as np
+        total = 0
+        acc = 0.0
+        for act in bpy.data.actions:
+            for fc in getattr(act, "fcurves", ()):
+                n = len(fc.keyframe_points)
+                if not n:
+                    continue
+                buf = np.empty(n * 2, dtype=np.float32)
+                fc.keyframe_points.foreach_get("co", buf)
+                total += n
+                acc += float(buf.sum())
+        if total == 0:
+            return None
+        return (total, round(acc, 4))
+    except Exception as _dbg_err:
+        debug.log("achievements.py:_keyframe_signature", _dbg_err)
+        return None
 
 
 def _graph_editor_open() -> bool:
@@ -886,10 +938,17 @@ def _detect_operations(scene, depsgraph):
     """Впізнає виконані операції за різницею стану. Викликається з
     depsgraph_update_post. Сканує лише меші, які depsgraph позначив
     зміненими, тож вартість не залежить від розміру сцени."""
-    global _op_prev_obj_count, _op_prev_total_verts
+    global _op_prev_obj_count, _op_prev_total_verts, _op_resync
 
     from .engine import get_engine
     eng = get_engine()
+
+    # Після undo/redo сцена стрибає назад, і різниця стану виглядає як
+    # справжня операція: скасований Ctrl+J зменшує к-сть вершин рівно так
+    # само, як Merge by Distance. Тому перший прохід після скасування лише
+    # перезаписує базу, нічого не зараховуючи.
+    resync = _op_resync
+    _op_resync = False
 
     # ---- об'єкти: join проти масового видалення
     try:
@@ -897,7 +956,7 @@ def _detect_operations(scene, depsgraph):
         cur_verts = _total_mesh_verts()
         if _op_prev_obj_count is not None:
             gone = _op_prev_obj_count - cur_objs
-            if gone > 0:
+            if gone > 0 and not resync:
                 lost = (_op_prev_total_verts or 0) - cur_verts
                 # join зберігає геометрію (втрати < 5% від наявної),
                 # видалення забирає її разом з об'єктами
@@ -931,7 +990,7 @@ def _detect_operations(scene, depsgraph):
             prev = _op_mesh_counts.get(me.name)
             _op_mesh_counts[me.name] = cur
 
-            if prev is not None:
+            if prev is not None and not resync:
                 d_v = cur[0] - prev[0]
                 d_e = cur[1] - prev[1]
                 # злиття вершин: вершин поменшало, об'єкти не зникали
@@ -941,25 +1000,35 @@ def _detect_operations(scene, depsgraph):
                 elif d_v > 0 and d_e > 0:
                     record_knife_cut(count=1)
 
-            if not eng.is_unlocked("INVERTED_REALITY"):
+            if not eng.is_unlocked("INVERTED_REALITY") and not resync:
                 sign = _mesh_orientation(me)
                 if sign is not None:
                     prev_sign = _op_mesh_orient.get(me.name)
                     _op_mesh_orient[me.name] = sign
                     if prev_sign is not None and prev_sign != sign:
                         record_normals_flipped()
+        if changed and not eng.is_unlocked("N_GON_CRIMINAL"):
+            if _scan_changed_for_ngon(changed):
+                eng.unlock("N_GON_CRIMINAL")
     except Exception as _dbg_err:
         debug.log("achievements.py:_detect_operations/meshes", _dbg_err)
 
     # ---- правки кривих у Graph Editor
+    # Рахуємо ЗМІНУ САМИХ КЛЮЧІВ, а не оновлення depsgraph: за одне
+    # перетягування ключа depsgraph шле десятки оновлень, і лічильник
+    # стрибав на +21 за один рух. Запікання симуляції теж штовхає depsgraph,
+    # але ключів не чіпає — тому воно більше сюди не зараховується.
     try:
+        global _op_graph_sig, _op_graph_last
         if not eng.is_unlocked("GRAPH_EDITOR_TWEAKER") and _graph_editor_open():
-            for upd in getattr(depsgraph, "updates", ()):
-                idp = getattr(upd, "id", None)
-                orig = getattr(idp, "original", idp) if idp is not None else None
-                if isinstance(orig, bpy.types.Action):
-                    record_graph_tweak(count=1)
-                    break
+            sig = _keyframe_signature()
+            if sig is not None:
+                if _op_graph_sig is not None and sig != _op_graph_sig and not resync:
+                    now_t = time.time()
+                    if now_t - _op_graph_last >= 0.35:   # один рух = один бал
+                        _op_graph_last = now_t
+                        record_graph_tweak(count=1)
+                _op_graph_sig = sig
     except Exception as _dbg_err:
         debug.log("achievements.py:_detect_operations/graph", _dbg_err)
 
@@ -967,20 +1036,42 @@ def _detect_operations(scene, depsgraph):
     try:
         for ob in scene.objects:
             for mod in getattr(ob, "modifiers", ()):
-                cache = (getattr(getattr(mod, "domain_settings", None), "point_cache", None)
-                         or getattr(mod, "point_cache", None))
-                if cache is None:
-                    continue
                 key = f"{ob.name}/{mod.name}"
-                baked = bool(getattr(cache, "is_baked", False))
+                ds = getattr(mod, "domain_settings", None)
+                if ds is not None:
+                    # Fluid-домен НЕ має point_cache — у нього власний кеш
+                    # (has_cache_baked_data / cache_frame_start / _end), тому
+                    # запікання води раніше не зараховувалось узагалі.
+                    baked = bool(getattr(ds, "has_cache_baked_data", False) or
+                                 getattr(ds, "has_cache_baked_mesh", False))
+                    f0 = int(getattr(ds, "cache_frame_start", scene.frame_start))
+                    f1 = int(getattr(ds, "cache_frame_end", scene.frame_end))
+                else:
+                    cache = getattr(mod, "point_cache", None)   # cloth, softbody
+                    if cache is None:
+                        continue
+                    baked = bool(getattr(cache, "is_baked", False))
+                    f0 = int(getattr(cache, "frame_start", scene.frame_start))
+                    f1 = int(getattr(cache, "frame_end", scene.frame_end))
                 was = _op_bake_state.get(key)
                 _op_bake_state[key] = baked
                 if baked and was is False:
-                    frames = int(getattr(cache, "frame_end", scene.frame_end)) - \
-                             int(getattr(cache, "frame_start", scene.frame_start))
-                    record_bake(frame_count=max(0, frames))
+                    record_bake(frame_count=max(0, f1 - f0))
     except Exception as _dbg_err:
         debug.log("achievements.py:_detect_operations/bake", _dbg_err)
+
+    # ---- бейк ригід-боді (кеш живе у сцені, а не в модифікаторі)
+    try:
+        rbw = getattr(scene, "rigidbody_world", None)
+        pc = getattr(rbw, "point_cache", None) if rbw else None
+        if pc is not None:
+            baked = bool(getattr(pc, "is_baked", False))
+            was = _op_bake_state.get("__rigidbody__")
+            _op_bake_state["__rigidbody__"] = baked
+            if baked and was is False:
+                record_bake(frame_count=max(0, int(pc.frame_end) - int(pc.frame_start)))
+    except Exception as _dbg_err:
+        debug.log("achievements.py:_detect_operations/rbbake", _dbg_err)
 
     # ---- застосування трансформу (Ctrl+A)
     try:
@@ -992,7 +1083,7 @@ def _detect_operations(scene, depsgraph):
                 now_id = _is_identity_transform(ob)
                 was_id = _op_xform_identity.get(ob.name)
                 _op_xform_identity[ob.name] = now_id
-                if was_id is False and now_id:
+                if was_id is False and now_id and not resync:
                     applied += 1
             if applied:
                 record_transform_apply(count=applied)
@@ -1202,6 +1293,54 @@ def _has_ngon_new_mesh() -> bool:
         if ob.type == 'MESH' and ob.data and _is_new('objects', ob.name):
             if _mesh_has_ngon(ob.data):
                 return True
+    return False
+
+
+# Межі для пошуку n-gon-ів у меші, який щойно змінили. Перевірка n-gon-а
+# принципово вимагає подивитись на КОЖЕН полігон, тож на важких сценах вона
+# може коштувати помітно. Обмежуємо двома способами: скануємо лише меші, які
+# depsgraph позначив зміненими, і не частіше ніж раз на секунду.
+_NGON_MAX_POLYS_OBJECT = 5_000_000   # numpy-шлях, ~10 мс на мільйон
+_NGON_MAX_FACES_EDIT = 200_000       # bmesh значно повільніший за numpy
+_ngon_last_scan = 0.0
+
+
+def _edit_mesh_has_ngon(me) -> bool:
+    """N-gon у меші, який зараз редагується (me.polygons там застарілий)."""
+    try:
+        import bmesh
+        bm = bmesh.from_edit_mesh(me)
+        if len(bm.faces) > _NGON_MAX_FACES_EDIT:
+            return False
+        for f in bm.faces:
+            if len(f.verts) >= 10:
+                return True
+    except Exception as _dbg_err:
+        debug.log("achievements.py:_edit_mesh_has_ngon", _dbg_err)
+    return False
+
+
+def _scan_changed_for_ngon(meshes) -> bool:
+    """N-gon серед щойно змінених мешів — працює і для вже наявних об'єктів.
+
+    Раніше перевірялись лише меші, СТВОРЕНІ цієї сесії, тому грань на 10+
+    вершин, зроблена всередині наявного меша, не зараховувалась.
+    """
+    global _ngon_last_scan
+    now_t = time.time()
+    if now_t - _ngon_last_scan < 1.0:
+        return False
+    _ngon_last_scan = now_t
+
+    ob = bpy.context.active_object
+    editing = ob.data if (ob is not None and ob.type == 'MESH'
+                          and ob.mode == 'EDIT' and ob.data) else None
+    for me in meshes:
+        if me is editing:
+            if _edit_mesh_has_ngon(me):
+                return True
+        elif len(me.polygons) <= _NGON_MAX_POLYS_OBJECT and _mesh_has_ngon(me):
+            return True
     return False
 
 
@@ -1874,6 +2013,8 @@ def on_undo_post(scene, _extra=None):
     не потрапляє (оператор не має прапорця REGISTER — скасування не можна
     «повторити»). bpy.app.handlers.undo_post дає це напряму.
     """
+    global _op_resync
+    _op_resync = True     # наступний прохід детектора — лише ресинк бази
     try:
         record_undo()
     except Exception as _dbg_err:
@@ -2262,6 +2403,7 @@ def reset_tracking_state():
 
     _undo_timestamps.clear()
     _shortcut_timestamps.clear()
+    globals()['_watcher_instance_active'] = False
 
 
 def register_listeners():
@@ -2367,7 +2509,7 @@ PROGRESSIVE_TARGETS = {
     "MATERIAL_HOARDER": 30,
     "COLOR_RAMP_ADDICT": 5,
     "GRAPH_EDITOR_TWEAKER": 100,
-    "BONE_COLLECTOR": 50,
+    "BONE_COLLECTOR": 75,
     "DRIVER_SPECIALIST": 5,
     "GRAVITY_MASTER": 100,
     "PARTICLE_STORM": 100000,

@@ -1,15 +1,15 @@
 schema_version = "1.0.0"
 
 id = "achievements"
-version = "1.0.3"
-name = "Blender Achievements"
-tagline = "Steam / Xbox / PlayStation-style achievement pop-ups for Blender"
+version = "1.0.4"
+name = "Achievements"
+tagline = "Steam / Xbox / PlayStation-style achievement pop-ups"
 maintainer = "art1kaxD <press39902@gmail.com>"
 type = "add-on"
 
 website = "https://github.com/AdamSmasherr/Blender-Achievements"
 
-tags = ["System", "3D View"]
+tags = ["System"]
 
 blender_version_min = "4.4.0"
 
@@ -18,7 +18,7 @@ license = [
 ]
 
 copyright = [
-  "2026 the Blender Achievements authors",
+  "2026 the Achievements add-on authors",
 ]
 
 [permissions]

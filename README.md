@@ -94,7 +94,7 @@ animation style + your own sound files per slot). Use **Export Profiles** /
 | Achievement | Description |
 | --- | --- |
 | **Graph Editor Tweaker** | Adjust over 100 keyframe interpolation handles in the Graph Editor. |
-| **Exoskeleton** | Build an armature rig containing over 50 bones. |
+| **Exoskeleton** | Build an armature rig containing 75 or more bones. |
 | **Driver Specialist** | Create 5 custom Python drivers linking object properties. |
 | **Domino Effect** ⭐ | Run a Rigid Body simulation with over 100 objects. |
 | **Let it cook** | Bake a fluid or smoke simulation longer than 250 frames. |
@@ -107,7 +107,7 @@ animation style + your own sound files per slot). Use **Export Profiles** /
 | Achievement | Description |
 | --- | --- |
 | **Night Shift** ⭐ | Keep a render process running for over 4 consecutive hours. |
-| **Cinema Quality** | Set render samples above 10,000. |
+| **Cinema Quality** | Finish a render with the sample count set above 10,000. |
 | **Warp Speed** | Render 100+ animation frames in under 1 minute. |
 | **Out of Memory** ⭐ | Trigger a render error due to running out of GPU memory. |
 | **Motion Blur** | Render an animation sequence with Motion Blur enabled. |
