@@ -831,6 +831,7 @@ def watcher_key_event(event):
 # 100 об'єктів через Ctrl+J зараховувало The Purge замість Frankenstein.
 
 _op_prev_obj_count = None      # к-сть об'єктів на попередньому оновленні
+_op_prev_mesh_count = None     # к-сть MESH-об'єктів на попередньому оновленні
 _op_prev_total_verts = None    # сума вершин по всіх мешах
 _op_mesh_counts = {}           # mesh.name -> (verts, edges)
 _op_mesh_orient = {}           # mesh.name -> знак орієнтації (+1/-1)
@@ -955,7 +956,7 @@ def _detect_operations(scene, depsgraph):
     """Впізнає виконані операції за різницею стану. Викликається з
     depsgraph_update_post. Сканує лише меші, які depsgraph позначив
     зміненими, тож вартість не залежить від розміру сцени."""
-    global _op_prev_obj_count, _op_prev_total_verts, _op_resync
+    global _op_prev_obj_count, _op_prev_mesh_count, _op_prev_total_verts, _op_resync
 
     from .engine import get_engine
     eng = get_engine()
@@ -967,22 +968,38 @@ def _detect_operations(scene, depsgraph):
     resync = _op_resync
     _op_resync = False
 
+    last_op = ""
+    try:
+        ops = bpy.context.window_manager.operators
+        if ops:
+            last_op = ops[-1].bl_idname
+    except Exception:
+        pass
+
     # ---- об'єкти: join проти масового видалення
     try:
         cur_objs = len(bpy.data.objects)
+        cur_meshes = sum(1 for ob in bpy.data.objects if ob.type == 'MESH')
         cur_verts = _total_mesh_verts()
         if _op_prev_obj_count is not None:
             gone = _op_prev_obj_count - cur_objs
             if gone > 0 and not resync:
                 lost = (_op_prev_total_verts or 0) - cur_verts
+                meshes_gone = (_op_prev_mesh_count or 0) - cur_meshes
                 # join зберігає геометрію (втрати < 5% від наявної),
-                # видалення забирає її разом з об'єктами
-                joined = lost <= max(8, int(cur_verts * 0.05))
+                # видалення забирає її разом з об'єктами.
+                # Важливо: якщо серед зниклих об'єктів НЕМАЄ мешів
+                # (meshes_gone <= 0 — видалили Empties, камери, світло),
+                # це точно НЕ join.
+                joined = (meshes_gone > 0
+                          and lost <= max(8, int(cur_verts * 0.05))
+                          and last_op == "OBJECT_OT_join")
                 if joined:
                     record_object_join(count=gone + 1)
                 elif gone >= 100 and not eng.is_unlocked("THE_PURGE"):
                     eng.unlock("THE_PURGE")
         _op_prev_obj_count = cur_objs
+        _op_prev_mesh_count = cur_meshes
         _op_prev_total_verts = cur_verts
     except Exception as _dbg_err:
         debug.log("achievements.py:_detect_operations/objects", _dbg_err)
@@ -1012,10 +1029,12 @@ def _detect_operations(scene, depsgraph):
                 d_e = cur[1] - prev[1]
                 # злиття вершин: вершин поменшало, об'єкти не зникали
                 if d_v < 0 and _op_prev_obj_count == len(bpy.data.objects):
-                    record_merge_by_distance(delta_vertices=-d_v)
+                    if last_op == "MESH_OT_remove_doubles":
+                        record_merge_by_distance(delta_vertices=-d_v)
                 # розріз: додались і вершини, і ребра
                 elif d_v > 0 and d_e > 0:
-                    record_knife_cut(count=1)
+                    if last_op in ("MESH_OT_knife_tool", "MESH_OT_knife_project"):
+                        record_knife_cut(count=1)
 
             # Орієнтацію міряємо ЛИШЕ поза Edit Mode: me.polygons під час
             # редагування застарілий, тож у едіті ми бачили стан ДО правки, а
@@ -1045,7 +1064,8 @@ def _detect_operations(scene, depsgraph):
                     # знято попередню орієнтацію.
                     if (prev_sign is not None and prev_sign != sign
                             and prev_counts == cur):
-                        record_normals_flipped()
+                        if last_op == "MESH_OT_flip_normals":
+                            record_normals_flipped()
         if changed and not eng.is_unlocked("N_GON_CRIMINAL"):
             if _scan_changed_for_ngon(changed):
                 eng.unlock("N_GON_CRIMINAL")
@@ -1123,7 +1143,8 @@ def _detect_operations(scene, depsgraph):
                 was_id = _op_xform_identity.get(ob.name)
                 _op_xform_identity[ob.name] = now_id
                 if was_id is False and now_id and not resync:
-                    applied += 1
+                    if last_op == "OBJECT_OT_transform_apply":
+                        applied += 1
             if applied:
                 record_transform_apply(count=applied)
     except Exception as _dbg_err:
@@ -1173,12 +1194,20 @@ def _count_drivers() -> int:
 
 
 def _count_fake_users() -> int:
-    """К-сть датаблоків із увімкненим Fake User (Shield) та без інших користувачів."""
+    """К-сть датаблоків із увімкненим Fake User (Shield).
+
+    Не фільтруємо за кількістю users: вибір датаблоку в браузері (щоб
+    натиснути щит) сам по собі додає йому реального користувача, тож вимога
+    "0 інших users" робить ачівку недосяжною для звичайного воркфлоу. Від
+    датаблоків, які вже мали fake user до старту сесії (напр. відкритий
+    файл), захищає порівняння з baseline у виклику нижче — рахуються лише
+    ті, кому щит призначили цієї сесії.
+    """
     n = 0
     for collection in (bpy.data.materials, bpy.data.textures, bpy.data.node_groups,
                        bpy.data.actions, bpy.data.armatures):
         for db in collection:
-            if getattr(db, "use_fake_user", False) and getattr(db, "users", 0) <= 1:
+            if getattr(db, "use_fake_user", False):
                 n += 1
     return n
 
@@ -1287,6 +1316,43 @@ def _accum_delta(eng, stat_key: str, current: int):
     if current > last:
         eng.add_stat(stat_key, current - last)
     _delta_last[stat_key] = current
+
+
+# Джерела "живих" значень для дельта-лічильників, які треба звірити після undo.
+# lambda замість прямого посилання — функції (напр. _count_keyframes) визначені
+# нижче за файлом, а лямбда резолвить ім'я лише в момент виклику.
+_ACCUM_DELTA_SOURCES = {
+    "polygons_total": lambda: _count_total_polys(),
+    "node_links_total": lambda: _count_total_node_links(),
+    "materials_total": lambda: len(bpy.data.materials),
+    "shapekeys_total": lambda: _count_total_shapekeys(),
+    "keyframes_total": lambda: _count_keyframes(),
+}
+
+
+def _reconcile_accum_deltas(eng):
+    """Синхронізує _delta_last із реальним станом сцени після Ctrl+Z.
+
+    Якщо undo повернув лічильник НИЖЧЕ за last — відкочуємо щойно
+    нараховану дельту (від'ємний add_stat).
+    Якщо undo повернув лічильник ВИЩЕ за last (скасування видалення) —
+    просто вирівнюємо baseline, щоб наступний _accum_delta не зарахував
+    відновлені об'єкти як "нові" (Delete+Undo exploit)."""
+    for stat_key, counter_fn in _ACCUM_DELTA_SOURCES.items():
+        last = _delta_last.get(stat_key)
+        if last is None:
+            continue
+        try:
+            current = counter_fn()
+        except Exception as _dbg_err:
+            debug.log("achievements.py:_reconcile_accum_deltas", _dbg_err)
+            continue
+        if current < last:
+            eng.add_stat(stat_key, current - last)   # від'ємна дельта
+        # Завжди вирівнюємо baseline — і при current < last, і при
+        # current > last (скасування видалення), щоб _accum_delta
+        # не побачив хибний приріст на наступному тіку таймера.
+        _delta_last[stat_key] = current
 
 
 _ngon_cache = {}   # mesh_name -> (poly_count, verdict) — щоб не сканувати те саме двічі
@@ -1487,7 +1553,8 @@ def on_depsgraph_update(scene, depsgraph):
             if deleted_cubes:
                 eng.add_stat("cubes_deleted", deleted_cubes)
                 if not eng.is_unlocked("GOODBYE_CUBE"):
-                    eng.unlock("GOODBYE_CUBE")
+                    if (time.time() - _launch_time) <= 30.0:
+                        eng.unlock("GOODBYE_CUBE")
 
             # Newly added monkeys → SUZANNES_BLESSING (session) + Monkey Business (global)
             new_monkeys = 0
@@ -1647,11 +1714,10 @@ def on_depsgraph_update(scene, depsgraph):
             debug.log("achievements.py:1361", _dbg_err)
             pass
 
-    # 9. MATERIAL_HOARDER check — лише матеріали, створені цієї сесії
-    if not eng.is_unlocked("MATERIAL_HOARDER") and _baseline is not None:
+    # 9. MATERIAL_HOARDER check — усі матеріали в сцені (опис: "in a single project file")
+    if not eng.is_unlocked("MATERIAL_HOARDER"):
         try:
-            new_materials = sum(1 for m in bpy.data.materials if _is_new('materials', m.name))
-            if new_materials >= 30:
+            if len(bpy.data.materials) >= 30:
                 eng.unlock("MATERIAL_HOARDER")
         except Exception as _dbg_err:
             debug.log("achievements.py:1370", _dbg_err)
@@ -2055,6 +2121,11 @@ def on_undo_post(scene, _extra=None):
     global _op_resync
     _op_resync = True     # наступний прохід детектора — лише ресинк бази
     try:
+        from .engine import get_engine
+        _reconcile_accum_deltas(get_engine())
+    except Exception as _dbg_err:
+        debug.log("achievements.py:on_undo_post_reconcile", _dbg_err)
+    try:
         record_undo()
     except Exception as _dbg_err:
         debug.log("achievements.py:on_undo_post", _dbg_err)
@@ -2078,7 +2149,7 @@ def on_blend_import_post(_a=None, _b=None):
 
 
 @persistent
-def on_frame_change_post(scene):
+def on_frame_change_post(scene, depsgraph=None):
     global _idle_seconds
     _idle_seconds = 0    # відтворення/зміна кадру = активність
 
@@ -2103,20 +2174,23 @@ def on_frame_change_post(scene):
     # CLOTH_EXPLOSION
     if not eng.is_unlocked("CLOTH_EXPLOSION"):
         try:
+            dg = depsgraph if depsgraph is not None else bpy.context.evaluated_depsgraph_get()
+            from mathutils import Vector
             for ob in scene.objects:
-                if ob.type == 'MESH':
-                    for mod in ob.modifiers:
-                        if mod.type == 'CLOTH':
-                            if ob.data and len(ob.data.vertices) > 0:
-                                from mathutils import Vector
-                                bb_max = max(Vector(pt).length for pt in ob.bound_box) if hasattr(ob, "bound_box") and ob.bound_box else 0.0
-                                v0_max = Vector(ob.data.vertices[0].co).length
-                                if bb_max <= 100.0 and v0_max <= 100.0:
-                                    continue
-                                max_co = max(v.co.length for v in ob.data.vertices)
-                                if max_co > 100.0:
-                                    eng.unlock("CLOTH_EXPLOSION")
-                                    break
+                if ob.type == 'MESH' and any(mod.type == 'CLOTH' for mod in ob.modifiers):
+                    # Модифікатор Cloth деформує лише evaluated-меш (через
+                    # depsgraph), а не ob.data напряму — тому координати
+                    # треба брати з ob.evaluated_get(dg).data, інакше вершини
+                    # завжди залишаються у недеформованому "сирому" стані.
+                    me_eval = ob.evaluated_get(dg).data
+                    me_orig = ob.data
+                    if me_eval and me_orig and len(me_eval.vertices) > 0 and len(me_eval.vertices) == len(me_orig.vertices):
+                        # Перевіряємо саме відхилення (displacement) від початкової геометрії,
+                        # а не абсолютні координати (які можуть бути великими просто через розмір меша)
+                        for v_eval, v_orig in zip(me_eval.vertices, me_orig.vertices):
+                            if (Vector(v_eval.co) - Vector(v_orig.co)).length_squared > 10000.0:
+                                eng.unlock("CLOTH_EXPLOSION")
+                                break
         except Exception as _dbg_err:
             debug.log("achievements.py:1652", _dbg_err)
             pass
@@ -2250,11 +2324,11 @@ def achievement_timer_callback():
     if all(eng.is_unlocked(aid) for aid in TIMER_ACHIEVEMENT_IDS):
         return 5.0
 
-    # 1. POLYGON_KING — лише меші, додані цієї сесії
+    # 1. POLYGON_KING — усі меші в сцені (опис: "in a single scene or mesh")
     if not eng.is_unlocked("POLYGON_KING"):
         try:
             total_polys = sum(len(ob.data.polygons) for ob in bpy.data.objects
-                              if ob.type == 'MESH' and ob.data and _is_new('objects', ob.name))
+                              if ob.type == 'MESH' and ob.data)
             if total_polys > 10000000:
                 eng.unlock("POLYGON_KING")
         except Exception as _dbg_err:
@@ -2280,6 +2354,8 @@ def achievement_timer_callback():
                 _uv_editing_seconds += 5
                 if _uv_editing_seconds >= 1800:
                     eng.unlock("UV_UNWRAPPING_PAIN")
+            else:
+                _uv_editing_seconds = 0
         except Exception as _dbg_err:
             debug.log("achievements.py:1804", _dbg_err)
             pass
@@ -2291,7 +2367,7 @@ def achievement_timer_callback():
         try:
             for mat in bpy.data.materials:
                 tree = getattr(mat, "node_tree", None)
-                if tree is None or len(tree.nodes) < 10:
+                if tree is None or len(tree.nodes) < 10 or len(tree.links) < 8:
                     continue
                 if not any(n.type in {'TEX_IMAGE', 'TEX_ENVIRONMENT'} for n in tree.nodes):
                     eng.unlock("PURE_PROCEDURAL")
@@ -2401,7 +2477,7 @@ def reset_tracking_state():
     global _max_join_count, _max_merge_count, _progress_cache, _progress_cache_time
     global _knife_cut_count, _graph_tweaks, _applied_objects_count
     global _last_depsgraph_heavy_scan_time, _last_depsgraph_node_sig
-    global _op_prev_obj_count, _op_prev_total_verts, _op_mesh_counts
+    global _op_prev_obj_count, _op_prev_mesh_count, _op_prev_total_verts, _op_mesh_counts
     global _op_mesh_orient, _op_xform_identity, _op_bake_state
 
     _known_objects = None
@@ -2428,6 +2504,7 @@ def reset_tracking_state():
     _ngon_cache.clear()
 
     _op_prev_obj_count = None
+    _op_prev_mesh_count = None
     _op_prev_total_verts = None
     _op_mesh_counts = {}
     _op_mesh_orient = {}
@@ -2618,16 +2695,14 @@ def _compute_all_progress() -> dict:
     polys = bones = autonamed = 0
     try:
         for ob in bpy.data.objects:
-            if not _is_new('objects', ob.name):
-                continue
             t = getattr(ob, "type", None)
             if t == 'MESH' and ob.data:
                 polys += len(ob.data.polygons)
-                if re.match(r".*\.\d{3}$", ob.name):
+                if _is_new('objects', ob.name) and re.match(r".*\.\d{3}$", ob.name):
                     autonamed += 1
             elif t == 'ARMATURE' and ob.data:
                 bones = max(bones, len(ob.data.bones))
-            elif re.match(r".*\.\d{3}$", ob.name):
+            elif _is_new('objects', ob.name) and re.match(r".*\.\d{3}$", ob.name):
                 autonamed += 1
     except Exception as _dbg_err:
         debug.log("achievements.py:2131", _dbg_err)
@@ -2642,7 +2717,6 @@ def _compute_all_progress() -> dict:
         for mat in bpy.data.materials:
             if not _is_new('materials', mat.name):
                 continue
-            new_mats += 1
             nt = getattr(mat, "node_tree", None)
             if nt:
                 max_nodes = max(max_nodes, len(nt.nodes))
@@ -2650,7 +2724,7 @@ def _compute_all_progress() -> dict:
     except Exception as _dbg_err:
         debug.log("achievements.py:2148", _dbg_err)
         pass
-    p["MATERIAL_HOARDER"] = new_mats
+    p["MATERIAL_HOARDER"] = len(bpy.data.materials)
     p["COLOR_RAMP_ADDICT"] = max_cr
 
     # --- один прохід по нод-групах: spaghetti / вкладені групи ---
