@@ -31,7 +31,7 @@ def _read_version() -> str:
     return m.group(1)
 
 
-def _should_include(root: str, filename: str) -> bool:
+def _should_include(filename: str) -> bool:
     if filename.startswith(EXCLUDE_PREFIXES):
         return False
     if filename.endswith(EXCLUDE_SUFFIXES):
@@ -53,7 +53,7 @@ def build() -> str:
         for root, dirs, files in os.walk(PACKAGE_DIR):
             dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
             for fname in files:
-                if not _should_include(root, fname):
+                if not _should_include(fname):
                     continue
                 abs_path = os.path.join(root, fname)
                 rel_path = os.path.join(

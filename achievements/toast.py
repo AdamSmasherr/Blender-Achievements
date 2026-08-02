@@ -28,13 +28,6 @@ from gpu_extras.batch import batch_for_shader
 
 from . import debug
 
-try:
-    import aud
-    _HAS_AUD = True
-except Exception as _dbg_err:  # noqa: BLE001
-    debug.log("toast.py:32", _dbg_err)
-    _HAS_AUD = False
-
 # ------------------------------------------------------------------ палітра
 # Темний сланцевий фон Steam (виміряно з реального скріншоту).
 BG_LIGHT       = (0.00774, 0.01039, 0.01701)  # #1c2028 sRGB (лінійний)
@@ -190,9 +183,6 @@ FONT_FAMILIES = {
 
 _fonts = {}               # (style, role) -> font id
 _font_paths_loaded = []   # filepaths given to blf.load(), потрібні для blf.unload()
-
-_aud_device = None
-_aud_handle = None
 
 
 def _get_style():
@@ -717,15 +707,14 @@ def _pulse_phase(p):
 
 
 def _draw_icon_image(texture, x, y, w, h, alpha):
-    shader = gpu.shader.from_builtin('IMAGE')
-    coords = [(x, y), (x + w, y), (x + w, y + h),
-              (x, y), (x + w, y + h), (x, y + h)]
-    uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
-           (0.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
-    batch = batch_for_shader(shader, 'TRIS', {"pos": coords, "texCoord": uvs})
-    shader.bind()
-    shader.uniform_sampler("image", texture)
-    batch.draw(shader)
+    """Іконка ачивки — повна текстура з урахуванням прозорості картки.
+
+    Раніше тут стояв вбудований IMAGE-шейдер, який ігнорував `alpha`: картка
+    плавно виїжджала й згасала, а іконка стрибком з'являлась і зникала на
+    повній непрозорості. `_draw_image_uv` уже вміє тінтувати — це той самий
+    малюнок з u/v на всю текстуру.
+    """
+    _draw_image_uv(texture, x, y, w, h, alpha=alpha)
 
 
 def _init_shaders():
@@ -1377,10 +1366,35 @@ def _unload_fonts():
     _fonts = {}
 
 
+def invalidate_textures():
+    """Скидає кеш GPU-текстур. Викликається при завантаженні іншого .blend.
+
+    `gpu.texture.from_image()` прив'язана до датаблоку `bpy.data.images`, а
+    відкриття нового файлу зносить увесь bpy.data разом із ним. Кеш при цьому
+    лишався б із текстурами, чиї джерела вже мертві — артефакти в кадрі або
+    падіння на семплінгу. Скидання лише кеш-словників: наступний малюнок
+    перезавантажить зображення й створить текстури заново.
+
+    Тости, що вже висять, теж чистимо: у кожного свій `icon_img`/`icon_tex` із
+    datablock'ів попереднього файлу.
+    """
+    global _asset_tex, _mask_tex, _mask_failed
+    _asset_tex = {}
+    _mask_tex = None
+    _mask_failed = False
+    for t in list(_toasts) + list(_pending):
+        try:
+            t['icon_tex'] = None
+            t['icon_img'] = None
+            t['icon_done'] = True     # без датаблоку відновлювати нічого
+        except Exception as _dbg_err:  # noqa: BLE001
+            debug.log("toast.py:invalidate_textures", _dbg_err)
+
+
 def remove_handler():
     global _draw_handle, _pending, _shader_uniform, _shader_smooth
     global _shader_conic, _shader_radial, _shader_image_tint, _mask_tex, _mask_failed
-    global _aud_device, _aud_handle, _asset_tex, _last_spawn
+    global _asset_tex, _last_spawn
     _pending.clear()
     _toasts.clear()
     _asset_tex = {}
@@ -1400,14 +1414,6 @@ def remove_handler():
             bpy.app.timers.unregister(_tick)
         except (ValueError, RuntimeError):
             pass
-    if _aud_handle is not None:
-        try:
-            _aud_handle.stop()
-        except Exception as _dbg_err:
-            debug.log("toast.py:1379", _dbg_err)
-            pass
-        _aud_handle = None
-    _aud_device = None
     _shader_uniform = None
     _shader_smooth = None
     _shader_conic = None

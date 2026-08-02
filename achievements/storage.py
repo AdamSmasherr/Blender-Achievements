@@ -44,10 +44,17 @@ def _file_lock(lock_fp, timeout=3.0):
     locked = False
     try:
         f = open(lock_fp, "a+")
+        # msvcrt.locking() працює з байтовим діапазоном ВІД ПОТОЧНОЇ ПОЗИЦІЇ, а
+        # "a+" ставить її в кінець файлу. Зняття блокування нижче робить
+        # seek(0), тож без цього seek блокували б один діапазон, а розблоковували
+        # інший. На порожньому lock-файлі позиція й так 0 і все сходилось
+        # випадково — фіксуємо обидві сторони на нулі явно.
+        f.seek(0)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
                 if _HAS_MSVCRT:
+                    f.seek(0)
                     msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
                 else:
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -139,31 +146,40 @@ class AchievementStorage:
             return {"version": SCHEMA_VERSION, "unlocked": {}, "stats": {}}
 
     @staticmethod
-    def _merge(disk: dict, ours: dict) -> dict:
+    def _merge(disk: dict, ours: dict, force_keys=None) -> dict:
         """Combines on-disk state with our in-memory state instead of blindly
         overwriting, so a second Blender instance flushing later doesn't erase
         progress the first instance already persisted. `unlocked` entries are
         unioned (an achievement, once unlocked, stays unlocked); numeric
         `stats` counters take the max of the two sides, since they are
         cumulative/monotonic by design.
+
+        `force_keys` is the escape hatch from that max(): stat keys the caller
+        deliberately *decreased* (rolling back a Delete+Undo exploit) are
+        written verbatim. Without it max() would restore the inflated on-disk
+        value on the very next flush and the rollback would never stick.
         """
         unlocked = dict(disk.get("unlocked") or {})
         unlocked.update(ours.get("unlocked") or {})
 
+        forced = set(force_keys or ())
         stats = dict(disk.get("stats") or {})
         for k, v in (ours.get("stats") or {}).items():
             dv = stats.get(k)
-            if isinstance(v, (int, float)) and isinstance(dv, (int, float)):
+            if k in forced:
+                stats[k] = v
+            elif isinstance(v, (int, float)) and isinstance(dv, (int, float)):
                 stats[k] = max(v, dv)
             else:
                 stats[k] = v
         return {"version": SCHEMA_VERSION, "unlocked": unlocked, "stats": stats}
 
-    def save_state(self, data: dict) -> bool:
+    def save_state(self, data: dict, force_keys=None) -> bool:
         """Merges with on-disk state under a cross-process lock, then saves
-        atomically. Use this for normal incremental saves."""
+        atomically. Use this for normal incremental saves. `force_keys` names
+        stat keys whose in-memory value must win over the on-disk one."""
         with _file_lock(self._lock_filepath):
-            merged = self._merge(self.load_state(), data)
+            merged = self._merge(self.load_state(), data, force_keys)
             return self._raw_save(merged)
 
     def _raw_save(self, data: dict) -> bool:
@@ -219,9 +235,9 @@ def load_state() -> dict:
     return _default_storage.load_state()
 
 
-def save_state(data: dict) -> bool:
+def save_state(data: dict, force_keys=None) -> bool:
     """Convenience module-level function to save state."""
-    return _default_storage.save_state(data)
+    return _default_storage.save_state(data, force_keys)
 
 
 def reset_all() -> bool:

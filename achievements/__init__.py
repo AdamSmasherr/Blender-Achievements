@@ -14,23 +14,18 @@ from . import storage
 from . import achievements
 from . import engine
 from . import sounds
-
-_timer = achievements.achievement_timer_callback
-_on_depsgraph = achievements.on_depsgraph_update
+from . import debug
 
 
 bl_info = {
     "name": "Achievements",
     "author": "art1kaxD",
-    "version": (1, 0, 6),
+    "version": (1, 0, 7),
     "blender": (4, 4, 0),
     "location": "View3D > Sidebar (N) > Achievements",
     "description": "Native zero-dependency achievement tracking and viewport notifications for Blender.",
     "category": "System",
 }
-
-_ADDON_DIR = os.path.dirname(__file__)
-SOUND_PATH = os.path.join(_ADDON_DIR, "assets", "standart.wav")
 
 
 # ----------------- Background Operator Watcher -----------------
@@ -126,13 +121,30 @@ def _init_preset_sound_paths():
     return None
 
 
+def _tag_redraw_all():
+    """Перемальовує панелі, що показують прогрес (сайдбар N + Preferences)."""
+    try:
+        for win in bpy.context.window_manager.windows:
+            for area in win.screen.areas:
+                if area.type in {'VIEW_3D', 'PREFERENCES'}:
+                    area.tag_redraw()
+    except Exception as _dbg_err:  # noqa: BLE001
+        debug.log("__init__.py:_tag_redraw_all", _dbg_err)
+
+
 # ----------------- UI Operators -----------------
 
 class ACHIEVEMENT_OT_force_unlock(bpy.types.Operator):
     """Force unlock the specified achievement for testing."""
     bl_idname = "achievement.force_unlock"
     bl_label = "Force Unlock Achievement"
-    bl_description = "Force unlock the Goodbye Cube achievement"
+    bl_description = "Force unlock the achievement with the given ID"
+    # INTERNAL прибирає оператор з пошуку по F3. Без нього будь-хто міг набрати
+    # "Force Unlock Achievement" і видати собі що завгодно — цінність ачивок
+    # тримається лише на тому, що їх не можна просто так собі виписати.
+    # Оператор лишається доступним зі скриптів (bpy.ops.achievement.force_unlock)
+    # для QA.
+    bl_options = {'INTERNAL'}
 
     achievement_id: bpy.props.StringProperty(
         name="Achievement ID",
@@ -146,6 +158,41 @@ class ACHIEVEMENT_OT_force_unlock(bpy.types.Operator):
         else:
             self.report({'INFO'}, f"Already unlocked: {self.achievement_id}")
         return {'FINISHED'}
+
+
+class ACHIEVEMENT_OT_reset_progress(bpy.types.Operator):
+    """Erase every unlocked achievement and all cumulative stats."""
+    bl_idname = "achievement.reset_progress"
+    bl_label = "Reset All Progress"
+    bl_description = ("Permanently erase all unlocked achievements and cumulative "
+                      "stats. This cannot be undone")
+    bl_options = {'REGISTER'}
+
+    def invoke(self, context, event):
+        # Дія незворотна і стирає прогрес за всі сесії — питаємо підтвердження.
+        wm = context.window_manager
+        try:
+            return wm.invoke_confirm(
+                self, event,
+                title="Reset all achievement progress?",
+                message="Every unlocked achievement and all cumulative stats "
+                        "will be erased. This cannot be undone.",
+                confirm_text="Reset",
+                icon='WARNING',
+            )
+        except TypeError:
+            # Старіші збірки не знають іменованих аргументів invoke_confirm.
+            return wm.invoke_confirm(self, event)
+
+    def execute(self, context):
+        eng = engine.get_engine()
+        ok = eng.reset_all()
+        if ok:
+            self.report({'INFO'}, "All achievement progress has been reset")
+        else:
+            self.report({'ERROR'}, "Could not write the reset state to disk")
+        _tag_redraw_all()
+        return {'FINISHED'} if ok else {'CANCELLED'}
 
 
 class ACHIEVEMENT_OT_test_toast(bpy.types.Operator):
@@ -627,9 +674,7 @@ def draw_achievements_list(layout, icon_scale=3.4375, is_sidebar=False):
 
     for ach_id, ach_def in achievements.ACHIEVEMENTS.items():
         if eng.is_unlocked(ach_id):
-            unlocked_info = eng._unlocked.get(ach_id, {}) if isinstance(eng._unlocked, dict) else {}
-            unlocked_at = unlocked_info.get("unlocked_at", "") if isinstance(unlocked_info, dict) else ""
-            unlocked_list.append((ach_id, ach_def, unlocked_at))
+            unlocked_list.append((ach_id, ach_def, eng.get_unlocked_at(ach_id)))
         else:
             locked_list.append((ach_id, ach_def))
 
@@ -887,6 +932,19 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
 
         layout.separator()
 
+        # Скидання прогресу живе тільки тут, а не в сайдбарі: дія незворотна,
+        # і їй не місце за один промах миші від списку ачивок.
+        box_data = layout.box()
+        box_data.label(text="Progress Data:", icon='FILE_REFRESH')
+        row_reset = box_data.row()
+        row_reset.alert = True
+        row_reset.operator("achievement.reset_progress", text="Reset All Progress", icon='TRASH')
+        note = box_data.row()
+        note.enabled = False
+        note.label(text="Erases every unlocked achievement and all cumulative stats.", icon='ERROR')
+
+        layout.separator()
+
         draw_achievements_list(layout, icon_scale=3.4375)
 
 
@@ -929,6 +987,7 @@ _classes = (
     ACHIEVEMENT_UL_sound_profiles,
     ACHIEVEMENT_AddonPreferences,
     ACHIEVEMENT_OT_force_unlock,
+    ACHIEVEMENT_OT_reset_progress,
     ACHIEVEMENT_OT_test_toast,
     ACHIEVEMENT_OT_profile_add,
     ACHIEVEMENT_OT_profile_remove,
@@ -955,12 +1014,32 @@ def register():
     # Register event tracking handlers safely
     achievements.register_listeners()
 
-    # Запускаємо фоновий watcher трохи пізніше, коли UI-контекст буде готовий
-    bpy.app.timers.register(_launch_watcher, first_interval=0.3)
-    bpy.app.timers.register(_init_preset_sound_paths, first_interval=0.3)
+    # Запускаємо фоновий watcher трохи пізніше, коли UI-контекст буде готовий.
+    # is_registered обов'язковий: швидкий цикл вимкнути/увімкнути аддон інакше
+    # лишає кілька копій того самого таймера.
+    for cb in (_launch_watcher, _init_preset_sound_paths):
+        try:
+            if bpy.app.timers.is_registered(cb):
+                continue
+        except AttributeError:
+            pass
+        try:
+            bpy.app.timers.register(cb, first_interval=0.3)
+        except (ValueError, RuntimeError):
+            pass
 
 
 def unregister():
+    # Знімаємо власні таймери в парі до register(). _launch_watcher
+    # самоліквідується лише на наступному тику (через 30 с), і весь цей час
+    # тримає посилання на вивантажений модуль.
+    for cb in (_launch_watcher, _init_preset_sound_paths):
+        try:
+            if bpy.app.timers.is_registered(cb):
+                bpy.app.timers.unregister(cb)
+        except (AttributeError, ValueError, RuntimeError):
+            pass
+
     # Remove viewport draw handler if active
     toast.remove_handler()
 

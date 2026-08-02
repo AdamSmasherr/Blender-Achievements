@@ -3,7 +3,7 @@ Achievement registry definitions and event tracking framework for Blender Achiev
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Set, List, Tuple
+from typing import Dict, Optional, List, Tuple
 import os
 import tempfile
 import time
@@ -28,7 +28,7 @@ class AchievementDefinition:
     threshold: int = 0              # поріг лічильника для розблокування
 
 
-# Registry of all 42 available achievements across 6 categories
+# Registry of all 79 available achievements across 7 categories
 ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # --- Category 1: Basics ---
     "GOODBYE_CUBE": AchievementDefinition(
@@ -570,11 +570,6 @@ FRAME_CHANGE_ACHIEVEMENT_IDS = {
     "GRAVITY_MASTER", "CLOTH_EXPLOSION"
 }
 
-RENDER_PRE_ACHIEVEMENT_IDS = {
-    "RESPECT_THE_CUBE", "DONUT_MASTER",
-    "DENOISE_MAGIC", "CYCLES_ENTHUSIAST", "ALPHA_TRANSLUCENCY"
-}
-
 TIMER_ACHIEVEMENT_IDS = {
     "POLYGON_KING", "UV_UNWRAPPING_PAIN", "SAVED_BY_SHIELD",
     "DRIVER_SPECIALIST", "LIVING_ON_THE_EDGE",
@@ -594,8 +589,6 @@ _uv_editing_seconds = 0
 _render_start_time = None
 _rendered_frames_count = 0
 _motion_blur_active_at_render_start = False
-_pending_render_ids: Set[str] = set()   # рендер-ачивки, що чекають на видачу після завершення
-RENDER_REWARD_DELAY = 2.0               # затримка (сек) перед видачею після рендера
 
 # --- Session baseline (щоб зараховувати лише зроблене цієї сесії, а не вміст
 #     уже відкритого файлу). Знімається на старті сесії / відкритті файлу. ---
@@ -608,7 +601,6 @@ _graph_tweaks = 0
 _applied_objects_count = 0
 _msgbus_owners: List[object] = []
 _last_depsgraph_heavy_scan_time = 0.0
-_last_depsgraph_node_sig = None
 
 
 
@@ -723,6 +715,13 @@ def trigger_vram_error():
 # лише оператори з прапорцем REGISTER, викликані через подієву систему, —
 # ed.undo і модальний knife не потрапляють взагалі.
 #
+# Перевірено в Blender 5.2 наживо: `wm.operators` порожній (len == 0) навіть
+# після роботи в сесії, і ні EXEC-, ні INVOKE-виклики зі скрипта туди нічого
+# не додають. Тому `last_op` нижче — лише ДОДАТКОВЕ підтвердження там, де воно
+# випадково є; жодна ачивка не має залежати від нього одноосібно. Для ножа
+# основним сигналом слугує реальне натискання K у Edit Mode (див.
+# `_knife_armed_at`), бо модальний оператор у список не потрапляє в принципі.
+#
 # Тому операції тепер визначаються за ЗМІНОЮ СТАНУ сцени у
 # depsgraph_update_post (див. _detect_operations нижче) та штатними
 # хендлерами undo_post / blend_import_post. Модальний оператор лишився
@@ -798,15 +797,33 @@ def watcher_heartbeat():
 
 
 def watcher_key_event(event):
-    global _watcher_heartbeat
-    _watcher_heartbeat = time.time()
     """Реєструє клавіатурний шорткат для Shortcut Ninja (лише клавіатура,
-    без відкриття мишею меню — тому клавіші миші й колесо виключені)."""
+    без відкриття мишею меню — тому клавіші миші й колесо виключені), а заодно
+    «зводить» детектор ножа на натисканні K у Edit Mode."""
+    global _watcher_heartbeat, _knife_armed_at, _idle_seconds
+    _watcher_heartbeat = time.time()
     if not _watcher_running:
         return
+    # Будь-яке натискання (клавіша, кнопка миші, колесо) = людина за кермом.
+    # Раніше безділля скидали лише depsgraph / зміна кадру / рендер, тож
+    # орбіта в'юпорта, зміна режиму й гортання меню рахувались як 4 години
+    # нічогонероблення і видавали "What am I doing?" посеред роботи.
+    # MOUSEMOVE сюди не доходить (у нього value == 'NOTHING'), і це навмисне:
+    # зсунута мишею не вважається активністю.
+    _idle_seconds = 0
     try:
         if event.value != 'PRESS' or event.type in _SHORTCUT_IGNORE_TYPES:
             return
+        # Ніж модальний, тож у wm.operators не потрапляє ніколи (див. коментар
+        # вище). Реальна подія клавіатури — єдиний доступний нам сигнал, що
+        # ніж узагалі викликали. Саме зарахування робить _detect_operations,
+        # коли побачить характерну зміну геометрії.
+        if event.type == 'K' and not (event.ctrl or event.alt or event.oskey):
+            try:
+                if bpy.context.mode == 'EDIT_MESH':
+                    _knife_armed_at = time.time()
+            except Exception:  # noqa: BLE001
+                pass
         mods = ''.join(m for m, flag in (
             ('C', event.ctrl), ('A', event.alt), ('S', event.shift), ('O', event.oskey)
         ) if flag)
@@ -840,6 +857,40 @@ _op_bake_state = {}            # "object/modifier" -> чи був кеш зап�
 _op_resync = False             # True -> наступний прохід лише перезаписує базу
 _op_graph_sig = None           # підпис ключів анімації (Graph Editor Tweaker)
 _op_graph_last = 0.0           # час останнього зарахованого руху ключа
+_op_graph_checked = 0.0        # час останнього ОБЧИСЛЕННЯ підпису ключів
+
+# depsgraph_update_post приходить десятки разів за секунду (одне перетягування
+# об'єкта = злива оновлень), а частина перевірок детектора обходить усю сцену:
+# сума вершин, скан бейк-кешів усіх модифікаторів, перевірка трансформів. Ці
+# проходи не зобов'язані бути миттєвими — стан, який вони ловлять (запечений
+# кеш, застосований трансформ), нікуди не дінеться до наступного тику, — тож
+# крутимо їх не частіше ніж раз на _OP_FULL_SCAN_INTERVAL. Дешеві перевірки
+# (лічильник об'єктів, змінені depsgraph'ом меші) лишаються на кожному оновленні.
+_op_last_full_scan = 0.0
+_OP_FULL_SCAN_INTERVAL = 1.0   # с
+_OP_GRAPH_CHECK_INTERVAL = 0.2  # с; кредит за рух ключа і так throttled на 0.35
+
+# Час останнього натискання K у Edit Mode. Ніж модальний: клавішу бачимо на
+# початку, а зміна геометрії приходить лише після підтвердження різу, тож
+# тримаємо вікно. Прапорець «згорає» після першого зарахування, щоб одне
+# натискання не приписало ножу всі наступні правки.
+_knife_armed_at = 0.0
+_KNIFE_ARM_WINDOW = 120.0
+
+
+def _iter_action_fcurves(action):
+    """Усі fcurves екшена: і legacy `action.fcurves`, і слот-екшени 4.4+
+    (`layers[*].strips[*].channelbags[*].fcurves`).
+
+    Обидва шляхи потрібні й не дублюються: у 4.4+ шаровий екшен віддає
+    порожній `fcurves`, а вся анімація лежить у channelbag'ах; у legacy-екшенах
+    навпаки. Перевірено в 5.2: 0 ключів у `fcurves` проти 9 у channelbag.
+    """
+    yield from getattr(action, "fcurves", ()) or ()
+    for layer in getattr(action, "layers", ()) or ():
+        for strip in getattr(layer, "strips", ()) or ():
+            for cbag in getattr(strip, "channelbags", ()) or ():
+                yield from getattr(cbag, "fcurves", ()) or ()
 
 
 def _keyframe_signature():
@@ -853,7 +904,7 @@ def _keyframe_signature():
         total = 0
         acc = 0.0
         for act in bpy.data.actions:
-            for fc in getattr(act, "fcurves", ()):
+            for fc in _iter_action_fcurves(act):
                 n = len(fc.keyframe_points)
                 if not n:
                     continue
@@ -957,9 +1008,17 @@ def _detect_operations(scene, depsgraph):
     depsgraph_update_post. Сканує лише меші, які depsgraph позначив
     зміненими, тож вартість не залежить від розміру сцени."""
     global _op_prev_obj_count, _op_prev_mesh_count, _op_prev_total_verts, _op_resync
+    global _knife_armed_at, _op_last_full_scan
 
     from .engine import get_engine
     eng = get_engine()
+
+    # Чи дозволені цього разу проходи по всій сцені (див. _OP_FULL_SCAN_INTERVAL).
+    # Після undo/redo ресинк робимо повним, інакше база лишиться від старого стану.
+    now_mono = time.monotonic()
+    full_scan = _op_resync or (now_mono - _op_last_full_scan) >= _OP_FULL_SCAN_INTERVAL
+    if full_scan:
+        _op_last_full_scan = now_mono
 
     # Після undo/redo сцена стрибає назад, і різниця стану виглядає як
     # справжня операція: скасований Ctrl+J зменшує к-сть вершин рівно так
@@ -977,30 +1036,35 @@ def _detect_operations(scene, depsgraph):
         pass
 
     # ---- об'єкти: join проти масового видалення
+    # len(bpy.data.objects) дешевий, а сума вершин — прохід по всій сцені. Поки
+    # к-сть об'єктів не змінилась, ані join, ані видалення статися не могло, тож
+    # суму перераховуємо лише на зміні лічильника або на періодичному повному
+    # скані (щоб база не застоювалась після правок геометрії).
     try:
         cur_objs = len(bpy.data.objects)
-        cur_meshes = sum(1 for ob in bpy.data.objects if ob.type == 'MESH')
-        cur_verts = _total_mesh_verts()
-        if _op_prev_obj_count is not None:
-            gone = _op_prev_obj_count - cur_objs
-            if gone > 0 and not resync:
-                lost = (_op_prev_total_verts or 0) - cur_verts
-                meshes_gone = (_op_prev_mesh_count or 0) - cur_meshes
-                # join зберігає геометрію (втрати < 5% від наявної),
-                # видалення забирає її разом з об'єктами.
-                # Важливо: якщо серед зниклих об'єктів НЕМАЄ мешів
-                # (meshes_gone <= 0 — видалили Empties, камери, світло),
-                # це точно НЕ join.
-                joined = (meshes_gone > 0
-                          and lost <= max(8, int(cur_verts * 0.05))
-                          and last_op == "OBJECT_OT_join")
-                if joined:
-                    record_object_join(count=gone + 1)
-                elif gone >= 100 and not eng.is_unlocked("THE_PURGE"):
-                    eng.unlock("THE_PURGE")
-        _op_prev_obj_count = cur_objs
-        _op_prev_mesh_count = cur_meshes
-        _op_prev_total_verts = cur_verts
+        if _op_prev_obj_count is None or cur_objs != _op_prev_obj_count or full_scan:
+            cur_meshes = sum(1 for ob in bpy.data.objects if ob.type == 'MESH')
+            cur_verts = _total_mesh_verts()
+            if _op_prev_obj_count is not None:
+                gone = _op_prev_obj_count - cur_objs
+                if gone > 0 and not resync:
+                    lost = (_op_prev_total_verts or 0) - cur_verts
+                    meshes_gone = (_op_prev_mesh_count or 0) - cur_meshes
+                    # join зберігає геометрію (втрати < 5% від наявної),
+                    # видалення забирає її разом з об'єктами.
+                    # Важливо: якщо серед зниклих об'єктів НЕМАЄ мешів
+                    # (meshes_gone <= 0 — видалили Empties, камери, світло),
+                    # це точно НЕ join.
+                    joined = (meshes_gone > 0
+                              and lost <= max(8, int(cur_verts * 0.05))
+                              and last_op == "OBJECT_OT_join")
+                    if joined:
+                        record_object_join(count=gone + 1)
+                    elif gone >= 100 and not eng.is_unlocked("THE_PURGE"):
+                        eng.unlock("THE_PURGE")
+            _op_prev_obj_count = cur_objs
+            _op_prev_mesh_count = cur_meshes
+            _op_prev_total_verts = cur_verts
     except Exception as _dbg_err:
         debug.log("achievements.py:_detect_operations/objects", _dbg_err)
 
@@ -1031,9 +1095,17 @@ def _detect_operations(scene, depsgraph):
                 if d_v < 0 and _op_prev_obj_count == len(bpy.data.objects):
                     if last_op == "MESH_OT_remove_doubles":
                         record_merge_by_distance(delta_vertices=-d_v)
-                # розріз: додались і вершини, і ребра
+                # розріз: додались і вершини, і ребра.
+                # Сама по собі ця сигнатура збігається і з extrude, і з loop
+                # cut, і з subdivide, тому потрібне підтвердження, що це
+                # справді ніж: або ім'я оператора (якщо воно раптом є), або
+                # свіже натискання K у Edit Mode.
                 elif d_v > 0 and d_e > 0:
                     if last_op in ("MESH_OT_knife_tool", "MESH_OT_knife_project"):
+                        record_knife_cut(count=1)
+                    elif (_knife_armed_at
+                          and time.time() - _knife_armed_at <= _KNIFE_ARM_WINDOW):
+                        _knife_armed_at = 0.0      # одне натискання = один різ
                         record_knife_cut(count=1)
 
             # Орієнтацію міряємо ЛИШЕ поза Edit Mode: me.polygons під час
@@ -1078,8 +1150,14 @@ def _detect_operations(scene, depsgraph):
     # стрибав на +21 за один рух. Запікання симуляції теж штовхає depsgraph,
     # але ключів не чіпає — тому воно більше сюди не зараховується.
     try:
-        global _op_graph_sig, _op_graph_last
-        if not eng.is_unlocked("GRAPH_EDITOR_TWEAKER") and _graph_editor_open():
+        global _op_graph_sig, _op_graph_last, _op_graph_checked
+        # Сам підпис — numpy-прохід по всіх fcurves; за одне перетягування
+        # ключа depsgraph шле десятки оновлень, а зарахування все одно
+        # обмежене 0.35 с, тож частіше ніж раз на 0.2 с рахувати нема сенсу.
+        if (not eng.is_unlocked("GRAPH_EDITOR_TWEAKER")
+                and (now_mono - _op_graph_checked) >= _OP_GRAPH_CHECK_INTERVAL
+                and _graph_editor_open()):
+            _op_graph_checked = now_mono
             sig = _keyframe_signature()
             if sig is not None:
                 if _op_graph_sig is not None and sig != _op_graph_sig and not resync:
@@ -1092,37 +1170,42 @@ def _detect_operations(scene, depsgraph):
         debug.log("achievements.py:_detect_operations/graph", _dbg_err)
 
     # ---- завершені бейки фізики (Let it cook / Bake Sale)
+    # Прохід по всіх модифікаторах сцени: робимо його лише на повному скані і
+    # лише поки є що вигравати. Запечений кеш не «розпікається» сам, тож
+    # перехід False -> True не загубиться від затримки в секунду.
+    bake_done = eng.is_unlocked("THE_BIG_BAKE") and eng.is_unlocked("BAKE_SALE")
     try:
-        for ob in scene.objects:
-            for mod in getattr(ob, "modifiers", ()):
-                key = f"{ob.name}/{mod.name}"
-                ds = getattr(mod, "domain_settings", None)
-                if ds is not None:
-                    # Fluid-домен НЕ має point_cache — у нього власний кеш
-                    # (has_cache_baked_data / cache_frame_start / _end), тому
-                    # запікання води раніше не зараховувалось узагалі.
-                    baked = bool(getattr(ds, "has_cache_baked_data", False) or
-                                 getattr(ds, "has_cache_baked_mesh", False))
-                    f0 = int(getattr(ds, "cache_frame_start", scene.frame_start))
-                    f1 = int(getattr(ds, "cache_frame_end", scene.frame_end))
-                else:
-                    cache = getattr(mod, "point_cache", None)   # cloth, softbody
-                    if cache is None:
-                        continue
-                    baked = bool(getattr(cache, "is_baked", False))
-                    f0 = int(getattr(cache, "frame_start", scene.frame_start))
-                    f1 = int(getattr(cache, "frame_end", scene.frame_end))
-                was = _op_bake_state.get(key)
-                _op_bake_state[key] = baked
-                if baked and was is False:
-                    record_bake(frame_count=max(0, f1 - f0))
+        if full_scan and not bake_done:
+            for ob in scene.objects:
+                for mod in getattr(ob, "modifiers", ()):
+                    key = f"{ob.name}/{mod.name}"
+                    ds = getattr(mod, "domain_settings", None)
+                    if ds is not None:
+                        # Fluid-домен НЕ має point_cache — у нього власний кеш
+                        # (has_cache_baked_data / cache_frame_start / _end), тому
+                        # запікання води раніше не зараховувалось узагалі.
+                        baked = bool(getattr(ds, "has_cache_baked_data", False) or
+                                     getattr(ds, "has_cache_baked_mesh", False))
+                        f0 = int(getattr(ds, "cache_frame_start", scene.frame_start))
+                        f1 = int(getattr(ds, "cache_frame_end", scene.frame_end))
+                    else:
+                        cache = getattr(mod, "point_cache", None)   # cloth, softbody
+                        if cache is None:
+                            continue
+                        baked = bool(getattr(cache, "is_baked", False))
+                        f0 = int(getattr(cache, "frame_start", scene.frame_start))
+                        f1 = int(getattr(cache, "frame_end", scene.frame_end))
+                    was = _op_bake_state.get(key)
+                    _op_bake_state[key] = baked
+                    if baked and was is False:
+                        record_bake(frame_count=max(0, f1 - f0))
     except Exception as _dbg_err:
         debug.log("achievements.py:_detect_operations/bake", _dbg_err)
 
     # ---- бейк ригід-боді (кеш живе у сцені, а не в модифікаторі)
     try:
         rbw = getattr(scene, "rigidbody_world", None)
-        pc = getattr(rbw, "point_cache", None) if rbw else None
+        pc = getattr(rbw, "point_cache", None) if (rbw and not bake_done) else None
         if pc is not None:
             baked = bool(getattr(pc, "is_baked", False))
             was = _op_bake_state.get("__rigidbody__")
@@ -1133,8 +1216,13 @@ def _detect_operations(scene, depsgraph):
         debug.log("achievements.py:_detect_operations/rbbake", _dbg_err)
 
     # ---- застосування трансформу (Ctrl+A)
+    # Ще один прохід по всій сцені. Зарахування вимагає last_op ==
+    # OBJECT_OT_transform_apply, тож у решті випадків прохід потрібен лише щоб
+    # тримати базу «чи був трансформ одиничним» свіжою — а це терпить секунду
+    # затримки. На самому Ctrl+A скануємо одразу, з базою віком до секунди.
     try:
-        if not eng.is_unlocked("APPLY_ALL"):
+        if (not eng.is_unlocked("APPLY_ALL")
+                and (full_scan or last_op == "OBJECT_OT_transform_apply")):
             applied = 0
             for ob in scene.objects:
                 if ob.type != 'MESH':
@@ -1259,7 +1347,6 @@ def _is_new(kind: str, name: str) -> bool:
 
 _delta_last = {}          # останні бачені сумарні значення для дельта-лічильників
 _session_started = False  # чи вже нарахували запуск/день цієї сесії
-_prev_object_count = None # для детекції масового видалення (The Purge)
 _flush_tick = 0           # лічильник тіків для періодичного флашу stats на диск
 _idle_seconds = 0         # секунди без активності (What am I doing?)
 _max_join_count = 0       # найбільше об'єднання за раз (для прогресу Frankenstein)
@@ -1505,8 +1592,10 @@ def on_depsgraph_update(scene, depsgraph):
     eng = get_engine()
 
     _ensure_baseline()   # зафіксувати стан сесії, щоб рахувати лише нове
-    global _prev_object_count, _idle_seconds
+    global _idle_seconds, _progress_scene_dirty
     _idle_seconds = 0    # будь-яка зміна сцени = активність (скидає таймер безділля)
+    # Сцена змінилась -> сканувальна частина прогресу для панелі застаріла.
+    _progress_scene_dirty = True
 
     # Операції (join / merge / cut / apply / flip normals) впізнаються за
     # різницею стану — раніше це робив непрацездатний опитувач wm.operators.
@@ -1576,14 +1665,8 @@ def on_depsgraph_update(scene, depsgraph):
             debug.log("achievements.py:1231", _dbg_err)
             pass
 
-    # 1b. THE_PURGE — масове видалення 100+ об'єктів за одну операцію
-    try:
-        # The Purge тепер видається у _detect_operations(): там є перевірка
-        # суми вершин, яка відрізняє справжнє видалення від Ctrl+J.
-        _prev_object_count = len(bpy.data.objects)
-    except Exception as _dbg_err:
-        debug.log("achievements.py:1241", _dbg_err)
-        pass
+    # THE_PURGE видається у _detect_operations(): там є перевірка суми вершин,
+    # яка відрізняє справжнє масове видалення від Ctrl+J.
 
 
     # 2. SUBDIV_OVERKILL check — лише на об'єктах, доданих цієї сесії
@@ -1724,13 +1807,6 @@ def on_depsgraph_update(scene, depsgraph):
             pass
 
 
-@persistent
-def on_render_pre(scene):
-    """Викликається перед початком рендеру. Рендер-ачивки тут НЕ видаються,
-    щоб не зараховувати скасовані або недорендерені кадри."""
-    pass
-
-
 def _scene_render_candidates(scene):
     """set рендер-ачивок за станом сцени, які виконані, але ще не отримані."""
     from .engine import get_engine
@@ -1775,23 +1851,8 @@ def _scene_render_candidates(scene):
             debug.log("achievements.py:1420", _dbg_err)
             pass
 
-    # PURE_PROCEDURAL — перенесено в achievement_timer_callback, бо ця умова
-    # перевіряється зі стану сцени і не має сенсу чекати на рендер
-    if False:
-        try:
-            for ob in scene.objects:
-                if ob.type == 'MESH' and ob.data:
-                    for slot in ob.material_slots:
-                        mat = slot.material
-                        if mat and getattr(mat, "node_tree", None):
-                            nodes = mat.node_tree.nodes
-                            if len(nodes) >= 10:
-                                if not any(n.type == 'TEX_IMAGE' for n in nodes):
-                                    ids.add("PURE_PROCEDURAL")
-                                    break
-        except Exception as _dbg_err:
-            debug.log("achievements.py:1436", _dbg_err)
-            pass
+    # PURE_PROCEDURAL перевіряється зі стану сцени і не має сенсу чекати на
+    # рендер — див. achievement_timer_callback.
 
     # DENOISE_MAGIC
     if not eng.is_unlocked("DENOISE_MAGIC"):
@@ -1825,6 +1886,10 @@ def _scene_render_candidates(scene):
     return ids
 
 
+# Мінімум відрендерених кадрів, щоб рендер вважався анімацією, а не стіллом.
+_SPEED_BLUR_MIN_FRAMES = 2
+
+
 def _timing_render_candidates(scene):
     """set рендер-ачивок за таймінгом (тривалість/кадри/мо-блюр)."""
     from .engine import get_engine
@@ -1837,8 +1902,11 @@ def _timing_render_candidates(scene):
     # EEVEE_SPEEDSTER
     if not eng.is_unlocked("EEVEE_SPEEDSTER") and _rendered_frames_count >= 100 and elapsed < 60.0:
         ids.add("EEVEE_SPEEDSTER")
-    # SPEED_BLUR
-    if not eng.is_unlocked("SPEED_BLUR") and _motion_blur_active_at_render_start:
+    # SPEED_BLUR — саме анімація, а не один кадр. Опис обіцяє "animation
+    # sequence", а код видавав ачивку за будь-який F12 з увімкненим motion
+    # blur; на одному кадрі мо-блюр до того ж здебільшого й не видно.
+    if (not eng.is_unlocked("SPEED_BLUR") and _motion_blur_active_at_render_start
+            and _rendered_frames_count >= _SPEED_BLUR_MIN_FRAMES):
         ids.add("SPEED_BLUR")
     # NIGHT_SHIFT
     if not eng.is_unlocked("NIGHT_SHIFT") and elapsed >= 14400:
@@ -1847,32 +1915,6 @@ def _timing_render_candidates(scene):
     if not eng.is_unlocked("THE_LONG_HAUL") and elapsed >= 86400:
         ids.add("THE_LONG_HAUL")
     return ids
-
-
-def _reward_pending_render():
-    """Одноразовий таймер: видає відкладені рендер-ачивки через RENDER_REWARD_DELAY с."""
-    global _pending_render_ids
-    from .engine import get_engine
-    eng = get_engine()
-    ids = list(_pending_render_ids)
-    _pending_render_ids = set()
-    for aid in ids:
-        if not eng.is_unlocked(aid):
-            eng.unlock(aid)
-    return None   # одноразово
-
-
-def _schedule_render_reward(delay=RENDER_REWARD_DELAY):
-    try:
-        if bpy.app.timers.is_registered(_reward_pending_render):
-            return
-    except Exception as _dbg_err:
-        debug.log("achievements.py:1509", _dbg_err)
-        pass
-    try:
-        bpy.app.timers.register(_reward_pending_render, first_interval=delay)
-    except (ValueError, RuntimeError):
-        pass
 
 
 @persistent
@@ -1894,7 +1936,7 @@ def on_render_post(scene):
 @persistent
 def on_render_complete(scene):
     """Рендер завершився успішно → видаємо всі виконані рендер-ачивки."""
-    global _pending_render_ids
+    global _render_start_time
     oom_capture_stop()
     # Глобальні лічильники рендерів/кадрів (просто числа, без відкладання)
     try:
@@ -1912,14 +1954,15 @@ def on_render_complete(scene):
     except Exception as _dbg_err:
         debug.log("achievements.py:1548", _dbg_err)
         ids = set()
+    # Рендер закінчився: годинник зупиняємо ЗАРАЗ, після підрахунку кандидатів.
+    # Інакше 5-секундний таймер і далі міряв би time.time() - старт і видав би
+    # NIGHT_SHIFT через 4 години простою після рендеру на три секунди.
+    _render_start_time = None
     if ids:
         from .engine import get_engine
         eng = get_engine()
         for aid in ids:
             eng.unlock(aid)
-        _pending_render_ids |= ids
-        _schedule_render_reward(RENDER_REWARD_DELAY)
-        _reward_pending_render()
 
 
 @persistent
@@ -1928,7 +1971,9 @@ def on_render_cancel(scene):
     cancel). Рендер-ачивки не видаємо: вони додаються до черги лише в
     on_render_complete. Але саме тут закривається перехоплення консолі, бо
     аварійний рендер до render_complete не доходить."""
+    global _render_start_time
     oom_capture_stop()
+    _render_start_time = None   # див. on_render_complete: годинник має стати
 
 
 # ---------------- VRAM_VICTIM: перехоплення консолі рендеру ----------------
@@ -2001,9 +2046,17 @@ def oom_capture_start():
     Будь-яка помилка на цьому шляху означає просто відмову від детекції
     (напр. GUI-збірка Windows без консолі, де fd 1 невалідний) — рендер від
     цього не страждає.
+
+    У фоновому режимі (`blender -b`) не перехоплюємо взагалі. Злив назад у
+    справжній stdout тримається на bpy.app.timers, а вони під час рендеру в
+    headless надійно не крутяться: увесь прогрес рендеру мовчав би до кінця й
+    вивалювався одним блоком. Для рендер-ферм і CI це гірше, ніж відсутність
+    однієї ачивки — VRAM_VICTIM там просто не видається.
     """
     global _cap_active, _cap_file, _cap_path, _cap_saved_fd, _cap_offset
     if _cap_active:
+        return
+    if getattr(bpy.app, "background", False):
         return
     f = path = saved = None
     try:
@@ -2077,9 +2130,42 @@ def on_save_post(dummy):
     eng.flush_stats()
 
 
+def _is_crash_recovery_file() -> bool:
+    """Чи відкритий файл справді прийшов з відновлення після краху.
+
+    Раніше сюди зараховувались `.blend1` / `.blend2` — а це звичайні
+    інкрементні бекапи, які Blender робить при КОЖНОМУ збереженні. Відкрити
+    `model.blend1`, щоб глянути попередню версію, — буденна дія, а не
+    повернення з того світу; вона ж накручувала лічильник `recoveries`.
+
+    Справжніх шляхів відновлення два, і обидва ведуть у тимчасовий каталог:
+      * File > Recover Last Session -> `quit.blend`;
+      * File > Recover Auto Save    -> автозбереження з temp-каталогу.
+    `bpy.app.tempdir` — це підкаталог сесії всередині системного temp, а
+    автозбереження лежать поруч із ним, тож звіряємось із батьківським.
+    """
+    fp = bpy.data.filepath
+    if not fp:
+        return False
+    norm = os.path.normcase(os.path.normpath(fp))
+    base = os.path.basename(norm)
+    if base == "quit.blend" or "autosave" in base:
+        return True
+    try:
+        tmp_root = os.path.dirname(os.path.normcase(os.path.normpath(bpy.app.tempdir)))
+        if tmp_root and norm.startswith(tmp_root + os.sep):
+            return True
+    except Exception as _dbg_err:
+        debug.log("achievements.py:_is_crash_recovery_file", _dbg_err)
+    return False
+
+
 @persistent
 def on_load_post(dummy):
-    global _known_objects, _launch_time, _last_save_time, _prev_object_count
+    global _known_objects, _launch_time, _last_save_time
+    global _op_prev_obj_count, _op_prev_mesh_count, _op_prev_total_verts, _op_resync
+    global _op_mesh_counts, _op_mesh_orient, _op_xform_identity, _op_bake_state
+    global _progress_scene_dirty
     _launch_time = time.time()
     _last_save_time = time.time()
     try:
@@ -2095,19 +2181,42 @@ def on_load_post(dummy):
     _delta_last.clear()
     _ngon_cache.clear()          # імена мешів у новому файлі можуть збігатися
     _progress_cache.clear()
-    _prev_object_count = None
+    _progress_scene_dirty = True   # прогрес рахувався по попередньому файлу
+
+    # База детектора операцій належала попередньому файлу. Без скидання перший
+    # depsgraph_update_post порівнює дві різні сцени: файл на 150 об'єктів,
+    # відкритий після файлу на 10, дає gone = 140 і хибний THE_PURGE. Словники
+    # ключуються ІМЕНАМИ датаблоків, тож "Cube" зі старого файлу так само
+    # порівнявся б із "Cube" нового -> фантомні merge / knife / flip normals.
+    _op_prev_obj_count = None
+    _op_prev_mesh_count = None
+    _op_prev_total_verts = None
+    _op_mesh_counts.clear()
+    _op_mesh_orient.clear()
+    _op_xform_identity.clear()
+    _op_bake_state.clear()
+    _op_resync = True     # перший прохід після завантаження — лише ресинк бази
+
+    # GPU-текстури тостів прив'язані до bpy.data.images попереднього файлу.
+    try:
+        from . import toast
+        toast.invalidate_textures()
+    except Exception as _dbg_err:
+        debug.log("achievements.py:on_load_post/invalidate_textures", _dbg_err)
 
     from .engine import get_engine
     eng = get_engine()
-    if not eng.is_unlocked("THE_SURVIVOR"):
-        try:
-            fp = bpy.data.filepath.lower()
-            if "autosave" in fp or fp.endswith(".blend1") or fp.endswith(".blend2") or "quit.blend" in fp:
+    try:
+        if _is_crash_recovery_file():
+            # Лічильник поза перевіркою is_unlocked: інакше після першої ж
+            # ачивки він переставав рости, і милстоун на 10 відновлень
+            # («Live to Die Another Day») був недосяжний у принципі.
+            eng.add_stat("recoveries", 1)   # Live to Die Another Day (global)
+            if not eng.is_unlocked("THE_SURVIVOR"):
                 eng.unlock("THE_SURVIVOR")
-                eng.add_stat("recoveries", 1)   # Live to Die Another Day (global)
-        except Exception as _dbg_err:
-            debug.log("achievements.py:1609", _dbg_err)
-            pass
+    except Exception as _dbg_err:
+        debug.log("achievements.py:on_load_post/survivor", _dbg_err)
+        pass
 
 
 @persistent
@@ -2175,7 +2284,7 @@ def on_frame_change_post(scene, depsgraph=None):
     if not eng.is_unlocked("CLOTH_EXPLOSION"):
         try:
             dg = depsgraph if depsgraph is not None else bpy.context.evaluated_depsgraph_get()
-            from mathutils import Vector
+            import numpy as np
             for ob in scene.objects:
                 if ob.type == 'MESH' and any(mod.type == 'CLOTH' for mod in ob.modifiers):
                     # Модифікатор Cloth деформує лише evaluated-меш (через
@@ -2184,19 +2293,64 @@ def on_frame_change_post(scene, depsgraph=None):
                     # завжди залишаються у недеформованому "сирому" стані.
                     me_eval = ob.evaluated_get(dg).data
                     me_orig = ob.data
-                    if me_eval and me_orig and len(me_eval.vertices) > 0 and len(me_eval.vertices) == len(me_orig.vertices):
-                        # Перевіряємо саме відхилення (displacement) від початкової геометрії,
-                        # а не абсолютні координати (які можуть бути великими просто через розмір меша)
-                        for v_eval, v_orig in zip(me_eval.vertices, me_orig.vertices):
-                            if (Vector(v_eval.co) - Vector(v_orig.co)).length_squared > 10000.0:
-                                eng.unlock("CLOTH_EXPLOSION")
-                                break
+                    if not (me_eval and me_orig):
+                        continue
+                    n = len(me_eval.vertices)
+                    if n == 0 or n != len(me_orig.vertices):
+                        continue
+                    # Перевіряємо саме відхилення (displacement) від початкової
+                    # геометрії, а не абсолютні координати (які можуть бути
+                    # великими просто через розмір меша).
+                    #
+                    # foreach_get + numpy замість циклу по вершинах: це
+                    # frame_change_post, тобто кожен кадр плейбеку, а тканина на
+                    # 50k вершин у Python-циклі з двома Vector на вершину
+                    # з'їдала плейбек цілком.
+                    co_eval = np.empty(n * 3, dtype=np.float32)
+                    co_orig = np.empty(n * 3, dtype=np.float32)
+                    me_eval.vertices.foreach_get("co", co_eval)
+                    me_orig.vertices.foreach_get("co", co_orig)
+                    d = (co_eval - co_orig).reshape(n, 3)
+                    if float(np.max(np.einsum('ij,ij->i', d, d))) > 10000.0:
+                        eng.unlock("CLOTH_EXPLOSION")
+                        break
         except Exception as _dbg_err:
             debug.log("achievements.py:1652", _dbg_err)
             pass
 
 
 # --- Periodic Low-Frequency Timer Callback ---
+
+# Кеші детектора ключуються ІМЕНАМИ датаблоків і самі про видалення не
+# дізнаються. Довга сесія з масовим створенням/видаленням об'єктів роздувала б
+# їх без меж, а повторно використане ім'я ("Cube" після видалення старого
+# "Cube") ще й порівнювалося б із чужими лічильниками. Прибираємо записи, яким
+# більше не відповідає жоден датаблок.
+_OP_CACHE_PRUNE_THRESHOLD = 256   # нижче цього чистити нема сенсу
+
+
+def _prune_op_caches():
+    """Викидає з кешів детектора записи неіснуючих мешів/об'єктів."""
+    try:
+        total = (len(_op_mesh_counts) + len(_op_mesh_orient)
+                 + len(_op_xform_identity) + len(_op_bake_state) + len(_ngon_cache))
+        if total < _OP_CACHE_PRUNE_THRESHOLD:
+            return
+        mesh_names = {me.name for me in bpy.data.meshes}
+        obj_names = {ob.name for ob in bpy.data.objects}
+        for cache, live in ((_op_mesh_counts, mesh_names),
+                            (_op_mesh_orient, mesh_names),
+                            (_ngon_cache, mesh_names),
+                            (_op_xform_identity, obj_names)):
+            for key in [k for k in cache if k not in live]:
+                del cache[key]
+        # ключі виду "<object>/<modifier>" (+ службовий "__rigidbody__")
+        for key in [k for k in _op_bake_state
+                    if not k.startswith("__") and k.split("/", 1)[0] not in obj_names]:
+            del _op_bake_state[key]
+    except Exception as _dbg_err:
+        debug.log("achievements.py:_prune_op_caches", _dbg_err)
+
 
 def _count_keyframes(only_new: bool = False) -> int:
     """Загальна к-сть ключів у всіх екшенах.
@@ -2212,15 +2366,8 @@ def _count_keyframes(only_new: bool = False) -> int:
     for action in bpy.data.actions:
         if base is not None and action.name in base:
             continue
-        fcurves = getattr(action, "fcurves", None)
-        if fcurves:
-            for fc in fcurves:
-                total += len(fc.keyframe_points)
-        for layer in getattr(action, "layers", []):
-            for strip in getattr(layer, "strips", []):
-                for cbag in getattr(strip, "channelbags", []):
-                    for fc in getattr(cbag, "fcurves", []):
-                        total += len(fc.keyframe_points)
+        for fc in _iter_action_fcurves(action):
+            total += len(fc.keyframe_points)
     return total
 
 
@@ -2229,6 +2376,7 @@ def achievement_timer_callback():
     eng = get_engine()
 
     _ensure_baseline()
+    _prune_op_caches()
 
     # ---- Global cumulative counters + new session detectors (run every tick,
     #      незалежно від того, чи всі сесійні timer-ачивки вже отримано) ----
@@ -2344,10 +2492,22 @@ def achievement_timer_callback():
             if ws and ws.name == "UV Editing":
                 is_uv = True
             else:
+                # IMAGE_EDITOR — це не лише UV-редактор: та сама область у
+                # режимі VIEW обслуговує вкладку Rendering, у PAINT — текстурне
+                # малювання. Раніше зараховувався будь-який з них, тож півгодини
+                # з відкритим рендер-результатом видавали «Flat Earth».
+                # Потрібен саме UV-режим (`ui_mode`; у частині версій — `mode`).
                 screen = getattr(bpy.context, "screen", None)
                 if screen:
                     for area in screen.areas:
-                        if area.type == 'IMAGE_EDITOR':
+                        if area.type != 'IMAGE_EDITOR':
+                            continue
+                        space = getattr(area, "spaces", None)
+                        space = getattr(space, "active", None) if space else None
+                        if space is None:
+                            continue
+                        if 'UV' in (getattr(space, "ui_mode", None),
+                                    getattr(space, "mode", None)):
                             is_uv = True
                             break
             if is_uv:
@@ -2472,13 +2632,14 @@ def reset_tracking_state():
     global _known_objects, _launch_time, _last_save_time, _session_save_count
     global _uv_editing_seconds
     global _render_start_time, _rendered_frames_count, _motion_blur_active_at_render_start
-    global _pending_render_ids, _baseline, _respect_cube_armed
-    global _session_started, _prev_object_count, _flush_tick, _idle_seconds
+    global _baseline, _respect_cube_armed
+    global _session_started, _flush_tick, _idle_seconds
     global _max_join_count, _max_merge_count, _progress_cache, _progress_cache_time
     global _knife_cut_count, _graph_tweaks, _applied_objects_count
-    global _last_depsgraph_heavy_scan_time, _last_depsgraph_node_sig
+    global _last_depsgraph_heavy_scan_time
     global _op_prev_obj_count, _op_prev_mesh_count, _op_prev_total_verts, _op_mesh_counts
     global _op_mesh_orient, _op_xform_identity, _op_bake_state
+    global _op_last_full_scan, _op_graph_checked, _progress_scene_dirty
 
     _known_objects = None
     _launch_time = time.time()
@@ -2489,11 +2650,9 @@ def reset_tracking_state():
     _render_start_time = None
     _rendered_frames_count = 0
     _motion_blur_active_at_render_start = False
-    _pending_render_ids = set()
     _baseline = None
     _respect_cube_armed = False
     _session_started = False
-    _prev_object_count = None
     _flush_tick = 0
     _idle_seconds = 0
     _max_join_count = 0
@@ -2510,16 +2669,24 @@ def reset_tracking_state():
     _op_mesh_orient = {}
     _op_xform_identity = {}
     _op_bake_state = {}
+    _op_last_full_scan = 0.0
+    _op_graph_checked = 0.0
+    _progress_scene_dirty = True
 
     _knife_cut_count = 0
     _graph_tweaks = 0
     _applied_objects_count = 0
     _last_depsgraph_heavy_scan_time = 0.0
-    _last_depsgraph_node_sig = None
-
+    
     _undo_timestamps.clear()
     _shortcut_timestamps.clear()
-    globals()['_watcher_instance_active'] = False
+    # Позначку «модальна копія жива» скидаємо ЛИШЕ коли watcher і так зупинено
+    # (register_listeners робить це до start_watcher, unregister_listeners —
+    # після stop_watcher). Якщо ж скидання прогресу викликали при живому
+    # watcher'і, обнулення прапорця змусило б _launch_watcher підняти ДРУГУ
+    # копію поверх наявної, і кожне натискання клавіші рахувалося б двічі.
+    if not _watcher_running:
+        globals()['_watcher_instance_active'] = False
 
 
 def register_listeners():
@@ -2530,7 +2697,6 @@ def register_listeners():
         (on_depsgraph_update, bpy.app.handlers.depsgraph_update_post),
         (on_load_post, bpy.app.handlers.load_post),
         (on_save_post, bpy.app.handlers.save_post),
-        (on_render_pre, bpy.app.handlers.render_pre),
         (on_render_init, bpy.app.handlers.render_init),
         (on_render_post, bpy.app.handlers.render_post),
         (on_render_complete, bpy.app.handlers.render_complete),
@@ -2577,7 +2743,6 @@ def unregister_listeners():
         (on_depsgraph_update, bpy.app.handlers.depsgraph_update_post),
         (on_load_post, bpy.app.handlers.load_post),
         (on_save_post, bpy.app.handlers.save_post),
-        (on_render_pre, bpy.app.handlers.render_pre),
         (on_render_init, bpy.app.handlers.render_init),
         (on_render_post, bpy.app.handlers.render_post),
         (on_render_complete, bpy.app.handlers.render_complete),
@@ -2592,15 +2757,9 @@ def unregister_listeners():
     if hasattr(bpy.app.timers, "is_registered"):
         if bpy.app.timers.is_registered(achievement_timer_callback):
             bpy.app.timers.unregister(achievement_timer_callback)
-        if bpy.app.timers.is_registered(_reward_pending_render):
-            bpy.app.timers.unregister(_reward_pending_render)
     else:
         try:
             bpy.app.timers.unregister(achievement_timer_callback)
-        except (ValueError, RuntimeError):
-            pass
-        try:
-            bpy.app.timers.unregister(_reward_pending_render)
         except (ValueError, RuntimeError):
             pass
 
@@ -2643,14 +2802,28 @@ _progress_cache = {}          # ach_id -> current value
 _progress_cache_time = 0.0    # monotonic-час останнього перерахунку
 PROGRESS_CACHE_TTL = 1.0      # с; UI перемальовується десятки разів на секунду
 
+# Важка (сканувальна) половина прогресу кешується окремо від дешевої. Панель N
+# перемальовується постійно, і раз на секунду ганяти обхід усіх об'єктів,
+# матеріалів і нод-груп — це фонове навантаження поверх 5-секундного таймера й
+# per-depsgraph сканів, причому на нерухомій сцені результат щоразу той самий.
+# Тому скан крутиться лише коли depsgraph повідомив про зміну (або раз на
+# PROGRESS_SCENE_TTL — для джерел поза depsgraph, як-от к-сть увімкнених аддонів).
+_progress_scene_cache = {}
+_progress_scene_time = 0.0
+_progress_scene_dirty = True
+PROGRESS_SCENE_TTL = 10.0     # с
+
 
 def _compute_all_progress() -> dict:
-    """Один прохід по сцені → значення прогресу для всіх ачивок.
+    """Значення прогресу для всіх ачивок: дешеві лічильники щоразу заново,
+    сканувальна частина — з кешу `_compute_scene_progress`.
 
     Важливо: значення рахуються за тими самими правилами, що й розблокування
     (baseline-обмежені там, де unlock baseline-обмежений), інакше прогрес
     показував би те, що ніколи не приведе до ачивки.
     """
+    global _progress_scene_cache, _progress_scene_time, _progress_scene_dirty
+
     from .engine import get_engine
     eng = get_engine()
     p = {}
@@ -2673,6 +2846,24 @@ def _compute_all_progress() -> dict:
     p["CTRL_Z_HERO"] = sum(1 for t in _undo_timestamps if now_t - t <= 60.0)
     p["SHORTCUT_NINJA"] = len({sid for t, sid in _shortcut_timestamps if now_t - t <= 60.0})
 
+    now_mono = time.monotonic()
+    if _progress_scene_dirty or (now_mono - _progress_scene_time) >= PROGRESS_SCENE_TTL:
+        try:
+            _progress_scene_cache = _compute_scene_progress()
+        except Exception as _dbg_err:
+            debug.log("achievements.py:_compute_all_progress/scene", _dbg_err)
+            _progress_scene_cache = {}
+        _progress_scene_time = now_mono
+        _progress_scene_dirty = False
+
+    p.update(_progress_scene_cache)
+    return p
+
+
+def _compute_scene_progress() -> dict:
+    """Сканувальна частина прогресу: один прохід по об'єктах, матеріалах і
+    нод-групах. Викликається лише при зміні сцени (див. _progress_scene_dirty)."""
+    p = {}
     if _baseline is None:
         return p
 
@@ -2701,7 +2892,11 @@ def _compute_all_progress() -> dict:
                 if _is_new('objects', ob.name) and re.match(r".*\.\d{3}$", ob.name):
                     autonamed += 1
             elif t == 'ARMATURE' and ob.data:
-                bones = max(bones, len(ob.data.bones))
+                # Той самий фільтр, що й в unlock-логіці: рахуємо лише риги,
+                # створені цією сесією. Без нього панель показувала «120 / 100»
+                # на відкритому чужому ригу, який ніколи не дасть ачивку.
+                if _is_new('objects', ob.name):
+                    bones = max(bones, len(ob.data.bones))
             elif _is_new('objects', ob.name) and re.match(r".*\.\d{3}$", ob.name):
                 autonamed += 1
     except Exception as _dbg_err:
@@ -2712,7 +2907,7 @@ def _compute_all_progress() -> dict:
     p["OUTLINER_CHAOS"] = autonamed
 
     # --- один прохід по матеріалах: к-сть / ноди / color ramps ---
-    new_mats = max_nodes = max_cr = 0
+    max_nodes = max_cr = 0
     try:
         for mat in bpy.data.materials:
             if not _is_new('materials', mat.name):

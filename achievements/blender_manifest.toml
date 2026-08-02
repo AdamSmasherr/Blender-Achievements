@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "achievements"
-version = "1.0.6"
+version = "1.0.7"
 name = "Achievements"
 tagline = "Steam / Xbox / PlayStation-style achievement pop-ups"
 maintainer = "art1kaxD <press39902@gmail.com>"
@@ -11,7 +11,10 @@ website = "https://github.com/AdamSmasherr/Blender-Achievements"
 
 tags = ["System"]
 
-blender_version_min = "4.2.0"
+# Мусить збігатися з bl_info["blender"] у __init__.py і з README.
+# Для extension'ів виграє саме маніфест, тож занижене "4.2.0" фактично
+# пускало аддон у 4.2, де немає частини API (слот-екшени 4.4+).
+blender_version_min = "4.4.0"
 
 license = [
   "SPDX:GPL-3.0-or-later",

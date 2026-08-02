@@ -4,6 +4,7 @@ Coordinates persistence, event tracking, and viewport notifications.
 """
 
 import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
@@ -48,6 +49,9 @@ class AchievementEngine:
         self._unlocked: Dict[str, dict] = {}
         self._stats: Dict[str, Any] = {}       # persistent cumulative counters/dates
         self._stats_dirty = False
+        # Ключі, зменшені навмисно (відкат Delete+Undo). Storage._merge бере
+        # max() з диском, тож без цього списку зменшення не переживе флаш.
+        self._stats_forced: set = set()
         self._load_state()
         self._initialized = True
 
@@ -59,24 +63,60 @@ class AchievementEngine:
         stats = data.get("stats", {}) if isinstance(data, dict) else {}
         self._stats = stats if isinstance(stats, dict) else {}
         self._stats_dirty = False
+        self._stats_forced = set()
 
     def _persist(self) -> bool:
         """Writes unlocked + stats to disk and clears the dirty flag."""
-        ok = self.storage.save_state({"unlocked": self._unlocked, "stats": self._stats})
+        forced = set(self._stats_forced)
+        ok = self.storage.save_state(
+            {"unlocked": self._unlocked, "stats": self._stats}, force_keys=forced
+        )
         self._stats_dirty = False
+        if ok:
+            # Зменшення доїхало на диск — далі знову працює звичайний max().
+            self._stats_forced -= forced
         return ok
 
+    @contextmanager
+    def _using_filepath(self, filepath: str):
+        """Тимчасово перемикає storage на інший файл і ГАРАНТОВАНО повертає назад.
+
+        Раніше `filepath` писався в `storage._filepath` назавжди: один разовий
+        експорт мовчки перенаправляв туди всі подальші записи, і решта сесії
+        зберігалась повз основний файл прогресу.
+        """
+        prev = self.storage._filepath
+        self.storage._filepath = filepath
+        try:
+            yield
+        finally:
+            self.storage._filepath = prev
+
     def load_state(self, filepath: Optional[str] = None):
-        """Loads state from custom filepath if provided, or storage filepath."""
-        if filepath:
-            self.storage._filepath = filepath
-        self._load_state()
+        """Loads state from custom filepath if provided, or storage filepath.
+        A custom filepath applies to this call only."""
+        if not filepath:
+            self._load_state()
+            return
+        with self._using_filepath(filepath):
+            self._load_state()
 
     def save_state(self, filepath: Optional[str] = None) -> bool:
-        """Saves current unlocked state to custom filepath if provided, or storage filepath."""
-        if filepath:
-            self.storage._filepath = filepath
-        return self.storage.save_state({"unlocked": self._unlocked, "stats": self._stats})
+        """Saves current unlocked state to custom filepath if provided, or storage
+        filepath. A custom filepath applies to this call only."""
+        if not filepath:
+            return self._persist()
+        # Експорт не має вважатись «збереженням» основного стану: _persist()
+        # чистить прапорці незбережених змін, і після експорту вони б не
+        # доїхали до справжнього файлу прогресу.
+        dirty = self._stats_dirty
+        forced = set(self._stats_forced)
+        try:
+            with self._using_filepath(filepath):
+                return self._persist()
+        finally:
+            self._stats_dirty = dirty
+            self._stats_forced = forced
 
     # ----------------- Persistent cumulative stats (global achievements) -----------------
 
@@ -97,6 +137,9 @@ class AchievementEngine:
         except Exception as _dbg_err:
             debug.log("engine.py:95", _dbg_err)
             self._stats[key] = amount
+        if amount < 0:
+            # Навмисне зменшення має перебити більше значення на диску.
+            self._stats_forced.add(key)
         self._stats_dirty = True
         self._check_counter_achievements(key)
 
@@ -152,6 +195,19 @@ class AchievementEngine:
             return False
         return isinstance(self._unlocked, dict) and ach_id in self._unlocked
 
+    def get_unlocked_at(self, ach_id: str) -> str:
+        """ISO-час розблокування ачивки, або "" якщо вона ще закрита.
+
+        Публічна заміна прямому читанню `engine._unlocked` з UI: формат запису
+        (сьогодні — dict з "unlocked_at") лишається деталлю реалізації.
+        """
+        if not isinstance(self._unlocked, dict):
+            return ""
+        info = self._unlocked.get(ach_id)
+        if not isinstance(info, dict):
+            return ""
+        return str(info.get("unlocked_at", ""))
+
     def unlock(self, ach_id: str) -> bool:
         """Unlocks an achievement if not already unlocked, saving state and triggering toast notification."""
         if not ach_id or not isinstance(ach_id, str):
@@ -198,6 +254,7 @@ class AchievementEngine:
         self._unlocked.clear()
         self._stats.clear()
         self._stats_dirty = False
+        self._stats_forced.clear()
         res = self.storage.reset_all()
         print("[BlenderAchievement] All achievements reset.")
         return res
