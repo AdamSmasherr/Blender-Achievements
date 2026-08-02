@@ -640,13 +640,6 @@ def _split_description(text: str, max_line_chars: int = 40) -> list[str]:
     return [line1, line2]
 
 
-def _shows_custom_icon(ach_id: str) -> bool:
-    """Tiered achievements (I/II/III) all share a single icon file, so showing
-    it three times just repeats the same art. Only the final tier (III) shows
-    an icon at all; I and II leave the icon cell empty."""
-    return not (ach_id.endswith("_1") or ach_id.endswith("_2"))
-
-
 def draw_achievements_list(layout, icon_scale=3.4375, is_sidebar=False):
     eng = engine.get_engine()
     stats = eng.get_stats()
@@ -684,9 +677,7 @@ def draw_achievements_list(layout, icon_scale=3.4375, is_sidebar=False):
 
             # Icon column (Fixed proportion guarantees max scale=3.4375 regardless of panel width)
             icon_col = split.column(align=True)
-            if not _shows_custom_icon(ach_id):
-                icon_col.label(text="")
-            elif pcoll and ach_id in pcoll:
+            if pcoll and ach_id in pcoll:
                 try:
                     icon_col.template_icon(icon_value=pcoll[ach_id].icon_id, scale=icon_scale)
                 except Exception:
@@ -729,9 +720,7 @@ def draw_achievements_list(layout, icon_scale=3.4375, is_sidebar=False):
             icon_sub = icon_col.row(align=True)
             if hasattr(icon_sub, "active"):
                 icon_sub.active = False
-            if not _shows_custom_icon(ach_id):
-                icon_sub.label(text="")
-            elif pcoll and ach_id in pcoll:
+            if pcoll and ach_id in pcoll:
                 try:
                     icon_sub.template_icon(icon_value=pcoll[ach_id].icon_id, scale=icon_scale)
                 except Exception:
