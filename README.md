@@ -27,12 +27,36 @@ per-slot and master volume control. Export/import profiles as JSON to move them 
 - Runs entirely off Blender’s own Python API — no external dependencies,
 no network access, no telemetry.
 
+## What the add-on does (and what it stores)
+
+Nothing here happens behind your back — the full list:
+
+- **Watches your session** to detect achievement conditions: it reads scene
+data (objects, meshes, modifiers, node trees), listens to Blender’s
+depsgraph/render/save handlers, and runs one invisible modal operator that
+observes key presses without ever consuming them.
+- **Draws pop-up notifications** in the 3D Viewport when an achievement
+unlocks, and **plays a short sound** through Blender’s own audio system.
+Both can be turned off in the add-on preferences.
+- **Writes one file to your Blender configuration folder**:
+`blender_achievements.json` (next to it, a short-lived `.lock` file while
+saving). It holds unlocked achievements plus cumulative counters —
+total hours with Blender open, number of launches, days in a row, saves,
+renders, frames, polygons and similar tallies. That file is what makes
+global achievements survive a restart.
+- **Reads/writes files you explicitly pick**: your own sound files for
+custom profiles, and the JSON you choose when using Export/Import Profiles.
+- **Never connects to the internet.** No account, no telemetry, no analytics,
+no data leaves your machine. The statistics above exist only in that local
+JSON file and can be wiped at any time with **Reset Progress** in the
+preferences.
+
 ## Installation
 
 1. Download the latest `blender_achievements_vX_Y_Z.zip` from
 [Releases](../../releases) (or build it yourself — see below).
 2. In Blender: **Edit > Preferences > Add-ons > Install…**, pick the zip.
-3. Enable “Blender Achievements”.
+3. Enable “Achievements”.
 4. Open the **Achievements** tab in the 3D Viewport sidebar (press `N`) to
 see your progress, or find the same list under the addon’s preferences.
 

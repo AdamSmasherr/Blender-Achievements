@@ -17,17 +17,6 @@ from . import sounds
 from . import debug
 
 
-bl_info = {
-    "name": "Achievements",
-    "author": "art1kaxD",
-    "version": (1, 0, 7),
-    "blender": (4, 4, 0),
-    "location": "View3D > Sidebar (N) > Achievements",
-    "description": "Native zero-dependency achievement tracking and viewport notifications for Blender.",
-    "category": "System",
-}
-
-
 # ----------------- Background Operator Watcher -----------------
 
 class ACHIEVEMENT_OT_watcher(bpy.types.Operator):

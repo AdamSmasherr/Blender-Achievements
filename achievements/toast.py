@@ -161,9 +161,9 @@ def _asset(name, premul=True):
     _asset_tex[name] = tex
     return tex
 
-# --- Шрифти по стилях: Steam → Inter (OFL), PlayStation → IBM Plex Sans (OFL),
-# Xbox → Selawik (MIT). Усі вільно ліцензовані заміни фірмових шрифтів платформ.
-# Шляхи відносно assets/fonts/ аддона; перший наявний виграє.
+# --- Шрифти по стилях: Steam → Inter, PlayStation → IBM Plex Sans,
+# Xbox → Selawik. Усі три під SIL OFL 1.1 і забандлені в assets/fonts/;
+# перший наявний зі списку виграє.
 FONT_DIR = os.path.join(ASSET_DIR, "fonts")
 
 FONT_FAMILIES = {
@@ -222,21 +222,23 @@ def _rounded(style=None):
 
 
 def _load_font(rel_names):
-    """Завантажує перший наявний шрифт зі списку відносних шляхів; id або None."""
-    win = os.environ.get("WINDIR", "C:\\Windows")
-    roots = [FONT_DIR, os.path.dirname(__file__), os.path.join(win, "Fonts")]
-    for root in roots:
-        for n in rel_names:
-            p = os.path.join(root, n.replace("/", os.sep))
-            try:
-                if os.path.exists(p):
-                    fid = blf.load(p)
-                    if fid != -1:
-                        _font_paths_loaded.append(p)
-                        return fid
-            except Exception as _dbg_err:  # noqa: BLE001
-                debug.log("toast.py:222", _dbg_err)
-                pass
+    """Завантажує перший наявний шрифт зі списку імен у assets/fonts; id або None.
+
+    Шукаємо ВИКЛЮЧНО серед забандлених шрифтів — жодних системних тек, інакше
+    аддон малювався б по-різному на різних ОС. Якщо не вдалося нічого, викликач
+    (_font) відкочується на вбудований шрифт Blender з id 0.
+    """
+    for n in rel_names:
+        p = os.path.join(FONT_DIR, n.replace("/", os.sep))
+        try:
+            if os.path.exists(p):
+                fid = blf.load(p)
+                if fid != -1:
+                    _font_paths_loaded.append(p)
+                    return fid
+        except Exception as _dbg_err:  # noqa: BLE001
+            debug.log("toast.py:_load_font", _dbg_err)
+            pass
     return None
 
 
@@ -1134,7 +1136,7 @@ def _draw_xbox(t, now, region, scale, shelf_h):
         _draw_circle(cx, cy, rr, (XBOX_GREEN[0], XBOX_GREEN[1], XBOX_GREEN[2], ca * alpha))
 
         isz = cd * 0.52 * cs
-        # Xbox-логотип на початку, далі кросфейд у трофей/діамант (CSS 19%→24%)
+        # Іконка аддона на початку, далі кросфейд у трофей/діамант (CSS 19%→24%)
         if e < XBOX_T_IN:
             swap = _smooth01((e / XBOX_T_IN - XBOX_SPRITE_SWAP_AT) / 0.17)
         else:
@@ -1147,10 +1149,14 @@ def _draw_xbox(t, now, region, scale, shelf_h):
         # іконки збережені з премноженою альфою
         gpu.state.blend_set('ALPHA_PREMULT')
 
-        xbox_tex = _asset("blender_icon.png")
+        # X_icon.png збережена зі звичайною (straight) альфою, тож на час її
+        # малювання перемикаємось на ALPHA — інакше прозорі краї дали б ореол.
+        xbox_tex = _asset("X_icon.png", premul=False)
         if swap < 0.999 and xbox_tex is not None:
+            gpu.state.blend_set('ALPHA')
             _draw_image_uv(xbox_tex, cx - isz/2.0, cy - isz/2.0, isz, isz,
                            alpha=(1.0 - swap) * ca * alpha)
+            gpu.state.blend_set('ALPHA_PREMULT')
 
         if swap > 0.001:
             if t.get('rare'):
