@@ -1196,11 +1196,11 @@ def _draw_xbox(t, now, region, scale, shelf_h):
                 ang = (now * 2.0 * math.pi / XBOX_SPIN_T) % (2.0 * math.pi)
                 c = abs(math.cos(ang))
                 ta = swap * ca * alpha
-                if tro_plain is not None:
-                    _draw_image_uv(tro_plain, cx - isz/2.0, cy - isz/2.0, isz, isz, alpha=ta)
                 if tro_full is not None and c > 0.02:
                     w2 = isz * c
                     _draw_image_uv(tro_full, cx - w2/2.0, cy - isz/2.0, w2, isz, alpha=ta)
+                if tro_plain is not None:
+                    _draw_image_uv(tro_plain, cx - isz/2.0, cy - isz/2.0, isz, isz, alpha=ta)
 
     gpu.state.blend_set('NONE')
 
