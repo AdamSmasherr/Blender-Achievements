@@ -4,6 +4,10 @@ __pycache__/
 *.zip
 .agents/
 
+# Ad hoc dev/QA scripts, predecessors to the proper tests/ suite — kept
+# locally for reference, not meant to be shipped or reviewed as a repo tool.
+tools/
+
 # Screenshots for the README are hosted on GitHub's CDN, not committed here.
 image.png
 image-*.png

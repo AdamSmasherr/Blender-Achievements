@@ -29,9 +29,8 @@ from gpu_extras.batch import batch_for_shader
 from . import debug
 
 # ------------------------------------------------------------------ палітра
-# Темний сланцевий фон Steam (виміряно з реального скріншоту).
-BG_LIGHT       = (0.00774, 0.01039, 0.01701)  # #1c2028 sRGB (лінійний)
-BG_DARK        = (0.00168, 0.00369, 0.00714)  # #0e141b sRGB (лінійний)
+# Кольори, які користувач не налаштовує, лишаються константами. Усе, що
+# налаштовується, живе в STYLE_COLOR_DEFAULTS нижче.
 PANEL_ALPHA    = 0.985
 BORDER         = (0.025, 0.030, 0.040, 1.0)  # ледь помітна рамка картки
 
@@ -39,14 +38,99 @@ ICON_TOP       = (0.075, 0.086, 0.106, 1.0)    # майже чорна плит�
 ICON_BOTTOM    = (0.030, 0.035, 0.045, 1.0)
 STEEL_FRAME    = (0.20, 0.23, 0.28, 1.0)       # тонка темна рамка іконки (звичайна)
 
-TITLE_COL      = (1.00, 1.00, 1.00, 1.0)       # суцільний білий
-DESC_COL       = (0.58, 0.62, 0.68, 1.0)       # трохи світліший плаский сірий опис
+# ------------------------------------------------------------------ палітра стилів (налаштовується)
+# Кожен стиль анімації тримає власний набір кольорів, які користувач може
+# перевизначити в налаштуваннях. Значення тут — звичайний sRGB 0..1, тобто
+# рівно те, що стоїть у полі hex кольоропікера.
+STYLE_COLOR_KEYS = {
+    'STEAM': ("bg_light", "bg_dark", "title", "desc", "accent"),
+    'PS':    ("bg_left", "bg_right", "title", "desc", "accent"),
+    'XBOX':  ("bg", "title", "desc"),
+}
 
-# Золото для рідкісних ачивок
-GOLD_LIGHT     = (0.9882, 0.7176, 0.3059, 1.0) # #fcb74e
-GOLD_DARK      = (0.9882, 0.7176, 0.3059, 1.0) # #fcb74e
-GOLD_GLOW      = (0.9882, 0.7176, 0.3059, 1.0) # #fcb74e
-RARE_LABEL_COL = (0.9882, 0.7176, 0.3059, 1.0) # #fcb74e
+STYLE_LABELS = {'STEAM': "Steam", 'XBOX': "Xbox", 'PS': "PlayStation"}
+
+STYLE_COLOR_LABELS = {
+    "bg_light": "Card Highlight",
+    "bg_dark":  "Card Shade",
+    "bg_left":  "Card Left",
+    "bg_right": "Card Right",
+    "bg":       "Banner",
+    "title":    "Title Text",
+    "desc":     "Description Text",
+    "accent":   "Rare Accent",
+}
+
+STYLE_COLOR_DESCRIPTIONS = {
+    "bg_light": "Lighter end of the card's background gradient (top-left corner)",
+    "bg_dark":  "Darker end of the card's background gradient (bottom-right corner)",
+    "bg_left":  "Left end of the card's background gradient",
+    "bg_right": "Right end of the card's background gradient",
+    "bg":       "Fill of the circle and the banner",
+    "title":    "Colour of the achievement title",
+    "desc":     "Colour of the description line",
+    "accent":   "Golden burst, icon frame and star shown for rare achievements",
+}
+
+STYLE_COLOR_DEFAULTS = {
+    'STEAM': {
+        "bg_light": (0.1098, 0.1255, 0.1569),   # #1c2028
+        "bg_dark":  (0.0549, 0.0784, 0.1059),   # #0e141b
+        "title":    (1.0000, 1.0000, 1.0000),   # #ffffff
+        "desc":     (0.5800, 0.6200, 0.6800),   # #949eae
+        "accent":   (0.9882, 0.7176, 0.3059),   # #fcb74e
+    },
+    'PS': {
+        "bg_left":  (0.2431, 0.2235, 0.2471),   # #3e393f
+        "bg_right": (0.1412, 0.1294, 0.1412),   # #242124
+        "title":    (1.0000, 1.0000, 1.0000),   # #ffffff
+        "desc":     (0.5800, 0.6200, 0.6800),   # #949eae
+        "accent":   (0.9882, 0.7176, 0.3059),   # #fcb74e
+    },
+    'XBOX': {
+        "bg":       (0.2235, 0.5882, 0.0471),   # #39960c
+        "title":    (1.0000, 1.0000, 1.0000),   # #ffffff
+        "desc":     (1.0000, 1.0000, 1.0000),   # #ffffff
+    },
+}
+
+_STYLE_COLOR_PREFIX = {'STEAM': "steam", 'PS': "ps", 'XBOX': "xbox"}
+
+# Фон Steam малюється з поправкою на гаму: зашита константа #1c2028 давно
+# зберігалась як 0.1098**2.2. Тримаємо це перетворення тут, щоб у налаштуваннях
+# стояв звичний hex, а картка виглядала так само, як раніше.
+_GAMMA_KEYS = {('STEAM', "bg_light"), ('STEAM', "bg_dark")}
+
+
+def color_prop_name(style, key):
+    """Ім'я властивості в AddonPreferences під колір (стиль, ключ)."""
+    return f"{_STYLE_COLOR_PREFIX.get(style, 'steam')}_col_{key}"
+
+
+def style_color(style, key, alpha=1.0):
+    """Колір стилю як RGBA: значення з налаштувань або дефолт палітри."""
+    rgb = STYLE_COLOR_DEFAULTS.get(style, {}).get(key)
+    if rgb is None:
+        return (1.0, 1.0, 1.0, alpha)
+    try:
+        prefs = get_preferences()
+        if prefs is not None:
+            value = getattr(prefs, color_prop_name(style, key), None)
+            if value is not None:
+                rgb = (value[0], value[1], value[2])
+    except Exception as _dbg_err:  # noqa: BLE001
+        debug.log("toast.py:style_color", _dbg_err)
+    if (style, key) in _GAMMA_KEYS:
+        rgb = tuple(max(0.0, c) ** 2.2 for c in rgb)
+    return (rgb[0], rgb[1], rgb[2], alpha)
+
+
+def _scaled(rgb, factor):
+    """Той самий відтінок, але світліший/темніший (для похідних відтінків)."""
+    return (min(1.0, rgb[0] * factor),
+            min(1.0, rgb[1] * factor),
+            min(1.0, rgb[2] * factor),
+            rgb[3] if len(rgb) > 3 else 1.0)
 
 # ------------------------------------------------------------------ базові розміри (до UI-scale)
 PANEL_W  = 378
@@ -71,14 +155,9 @@ STEAM_GAP_T = 0.5      # пауза між появою сусідніх ачи�
 
 # --- PlayStation: та сама картка, але на 15% нижча, градієнт зліва направо ---
 PS_H_FACTOR = 0.85
-PS_GRAD_LEFT  = (0.2431, 0.2235, 0.2471)   # #3e393f
-PS_GRAD_RIGHT = (0.1412, 0.1294, 0.1412)   # #242124
 PS_DESC_TEXT = "Trophy earned!"
 
-# --- Xbox: репліка CodePen-анімації (кола + банер, зелений #39960C) ---
-XBOX_GREEN       = (0.2235, 0.5882, 0.0471, 1.0)   # #39960C
-XBOX_GREEN_LIGHT = (0.2510, 0.6627, 0.0549, 1.0)   # #40a90e
-XBOX_GREEN_DARK  = (0.1961, 0.5137, 0.0392, 1.0)   # #32830a
+# --- Xbox: репліка CodePen-анімації (кола + банер) ---
 XBOX_CIRCLE  = 66.0     # діаметр кола (картка трохи менша за оригінал)
 XBOX_BANNER_W = 320.0   # повна ширина банера
 XBOX_T_IN    = 2.52     # 24% від 10.5s — до повного розкриття
@@ -138,6 +217,7 @@ def _asset(name, premul=True):
     if name in _asset_tex:
         return _asset_tex[name]
     tex = None
+    img = None
     try:
         p = os.path.join(ASSET_DIR, name)
         if os.path.exists(p):
@@ -158,6 +238,15 @@ def _asset(name, premul=True):
     except Exception as _dbg_err:  # noqa: BLE001
         debug.log("toast.py:143", _dbg_err)
         tex = None
+    finally:
+        # Same reasoning as _ensure_icon_tex: the texture is fully uploaded
+        # to VRAM by this point, so keeping the datablock around only leaks
+        # an entry into bpy.data.images for every bundled sprite/glow asset.
+        if img is not None:
+            try:
+                bpy.data.images.remove(img, do_unlink=True)
+            except Exception as _dbg_err:  # noqa: BLE001
+                debug.log("toast.py:_asset/cleanup", _dbg_err)
     _asset_tex[name] = tex
     return tex
 
@@ -268,6 +357,7 @@ def _get_mask_tex():
         return _mask_tex
     if _mask_failed:
         return None
+    img = None
     try:
         img = bpy.data.images.load(_MASK_PATH, check_existing=True)
         _mask_tex = gpu.texture.from_image(img)
@@ -275,6 +365,12 @@ def _get_mask_tex():
         debug.log("toast.py:256", _dbg_err)
         _mask_failed = True
         _mask_tex = None
+    finally:
+        if img is not None:
+            try:
+                bpy.data.images.remove(img, do_unlink=True)
+            except Exception as _dbg_err:  # noqa: BLE001
+                debug.log("toast.py:_get_mask_tex/cleanup", _dbg_err)
     return _mask_tex
 
 
@@ -394,9 +490,7 @@ void main() {
     float dy = v;
     float d = clamp(sqrt(dx * dx + dy * dy), 0.0, 1.0);
 
-    vec3 c0 = vec3(0.00774, 0.01039, 0.01701); // #1c2028 sRGB (лінійний)
-    vec3 c1 = vec3(0.00168, 0.00369, 0.00714); // #0e141b sRGB (лінійний)
-    vec3 col = mix(c0, c1, d);
+    vec3 col = mix(u_c0, u_c1, d);
 
     fragColor = vec4(col, 0.985 * u_alpha);
 }
@@ -416,7 +510,11 @@ def _init_radial_shader():
                 stage = gpu.types.GPUStageInterfaceInfo('radial_interface')
                 stage.smooth('VEC2', 'v_uv')
                 info.vertex_out(stage)
+            # push-константи оголошуються від більшого типу до меншого —
+            # цього вимагає вирівнювання на Vulkan/Metal.
             info.push_constant('MAT4', 'ModelViewProjectionMatrix')
+            info.push_constant('VEC3', 'u_c0')
+            info.push_constant('VEC3', 'u_c1')
             info.push_constant('FLOAT', 'u_alpha')
             info.fragment_out(0, 'VEC4', 'fragColor')
             info.vertex_source(VERT_UV_SRC)
@@ -430,18 +528,20 @@ def _init_radial_shader():
     return _shader_radial
 
 
-def _draw_radial(pts, X, Y, W, H, alpha):
+def _draw_radial(pts, X, Y, W, H, alpha, c_light, c_dark):
     shader = _init_radial_shader()
     coords = _fan_tris(pts)
     if shader is None:
         _draw_vgrad(pts, Y, H,
-                    (BG_DARK[0], BG_DARK[1], BG_DARK[2], PANEL_ALPHA),
-                    (BG_LIGHT[0], BG_LIGHT[1], BG_LIGHT[2], PANEL_ALPHA), alpha)
+                    (c_dark[0], c_dark[1], c_dark[2], PANEL_ALPHA),
+                    (c_light[0], c_light[1], c_light[2], PANEL_ALPHA), alpha)
         return
     uvs = [((px - X) / W, (py - Y) / H) for (px, py) in coords]
     batch = batch_for_shader(shader, 'TRIS', {"pos": coords, "uv": uvs})
     shader.bind()
     shader.uniform_float("u_alpha", alpha)
+    shader.uniform_float("u_c0", c_light[:3])
+    shader.uniform_float("u_c1", c_dark[:3])
     batch.draw(shader)
 
 
@@ -499,7 +599,10 @@ void main() {
         float s = pow(bright * ray, 1.4);
         a = clamp(s * quick_fade * u_alpha * 0.90, 0.0, 1.0);
     }
-    vec3 gold = mix(vec3(0.985, 0.620, 0.180), vec3(0.995, 0.780, 0.320), bright * 0.35);
+    // Другий, світліший відтінок рахується тут, а не приходить окремою
+    // константою: шейдер уже впритул до гарантованих 128 байт push-констант.
+    vec3 gold_bright = min(vec3(1.0), u_gold * 1.10 + 0.03);
+    vec3 gold = mix(u_gold, gold_bright, bright * 0.35);
     fragColor = vec4(gold, a);
 }
 """
@@ -518,7 +621,10 @@ def _init_conic_shader():
                 stage = gpu.types.GPUStageInterfaceInfo('conic_interface')
                 stage.smooth('VEC2', 'v_uv')
                 info.vertex_out(stage)
+            # push-константи оголошуються від більшого типу до меншого —
+            # цього вимагає вирівнювання на Vulkan/Metal.
             info.push_constant('MAT4', 'ModelViewProjectionMatrix')
+            info.push_constant('VEC3', 'u_gold')
             info.push_constant('FLOAT', 'u_angle')
             info.push_constant('FLOAT', 'u_mask_angle')
             info.push_constant('FLOAT', 'u_alpha')
@@ -538,7 +644,7 @@ def _init_conic_shader():
     return _shader_conic
 
 
-def _draw_icon_glow(icx, icy, isz, now, alpha):
+def _draw_icon_glow(icx, icy, isz, now, alpha, accent):
     """Золотий бурст, що походить від квадратної рамки іконки.
 
     Два проходи одним шейдером:
@@ -572,6 +678,7 @@ def _draw_icon_glow(icx, icy, isz, now, alpha):
             shader.uniform_float("u_mode", mode)
             shader.uniform_float("u_glow_width", gw)
             shader.uniform_float("u_icon_half", icon_half)
+            shader.uniform_float("u_gold", accent[:3])
             shader.uniform_sampler("mask_tex", mask)
             batch.draw(shader)
         return True
@@ -826,6 +933,23 @@ def _ensure_icon_tex(t):
     """Створює GPU-текстуру іконки один раз, у валідному draw-контексті."""
     if t.get('icon_tex') is None and not t.get('icon_done'):
         img = t.get('icon_img')
+        # Датаблок із попереднього файлу не просто зникає — посилання лишається,
+        # але звернення до нього кидає ReferenceError. Перевіряємо дешевим
+        # доступом до поля, і якщо посилання мертве — беремо шлях і вантажимо
+        # заново у вже новий bpy.data, щоб картка не падала на запасну зірочку.
+        if img is not None:
+            try:
+                _ = img.name
+            except Exception:
+                img = None
+                t['icon_img'] = None
+        if img is None and t.get('icon_path'):
+            try:
+                img = bpy.data.images.load(t['icon_path'], check_existing=True)
+                t['icon_img'] = img
+            except Exception as _dbg_err:  # noqa: BLE001
+                debug.log("toast.py:_ensure_icon_tex/reload", _dbg_err)
+                img = None
         if img is not None:
             try:
                 # 'Non-Color' -> текстура RGBA8 замість SRGB8_A8. Інакше GPU
@@ -836,6 +960,20 @@ def _ensure_icon_tex(t):
             except Exception as _dbg_err:  # noqa: BLE001
                 debug.log("toast.py:821", _dbg_err)
                 t['icon_tex'] = None
+            finally:
+                # gpu.texture.from_image() uploads pixel data to VRAM синхронно
+                # й незалежно від датаблоку (перевірено емпірично: tex.read()
+                # дає той самий буфер до і після видалення джерела) — тримати
+                # Image далі лише засмічує bpy.data.images записом на кожну
+                # унікальну іконку ачивки, який ніколи не прибирається і лізе
+                # в Outliner та кожен дропдаун вибору картинки. icon_path
+                # лишається на `t`, тож invalidate_textures() (перемикання
+                # .blend посеред тоста) і далі зможе перезавантажити з диска.
+                try:
+                    bpy.data.images.remove(img, do_unlink=True)
+                except Exception as _dbg_err:  # noqa: BLE001
+                    debug.log("toast.py:_ensure_icon_tex/cleanup", _dbg_err)
+                t['icon_img'] = None
         t['icon_done'] = True
 
 
@@ -875,6 +1013,10 @@ def _draw_card(t, now, region, scale, shelf_h, style):
         Y += _stack_offset(t, now, scale, H)
 
     rare = t['rare']
+    pal_style = 'PS' if is_ps else 'STEAM'
+    accent = style_color(pal_style, "accent")
+    title_col = style_color(pal_style, "title")
+    desc_col = style_color(pal_style, "desc")
     gpu.state.blend_set('ALPHA')
 
     isz = (ICON_SZ * (PS_H_FACTOR if is_ps else 1.0)) * scale
@@ -886,19 +1028,21 @@ def _draw_card(t, now, region, scale, shelf_h, style):
     body = _round_rect_pts(X, Y, W, H, R)
     if is_ps:
         _draw_hgrad(body, X, W,
-                    (PS_GRAD_LEFT[0], PS_GRAD_LEFT[1], PS_GRAD_LEFT[2], PANEL_ALPHA),
-                    (PS_GRAD_RIGHT[0], PS_GRAD_RIGHT[1], PS_GRAD_RIGHT[2], PANEL_ALPHA),
+                    style_color('PS', "bg_left", PANEL_ALPHA),
+                    style_color('PS', "bg_right", PANEL_ALPHA),
                     alpha, mid=0.5)
     else:
-        _draw_radial(body, X, Y, W, H, alpha)
+        _draw_radial(body, X, Y, W, H, alpha,
+                     style_color('STEAM', "bg_light"),
+                     style_color('STEAM', "bg_dark"))
 
     # --- рідкісний золотий бурст навколо іконки (не для PlayStation-стилю)
     if rare and not is_ps:
-        if not _draw_icon_glow(icx, icy, isz, now, alpha):
+        if not _draw_icon_glow(icx, icy, isz, now, alpha, accent):
             for off, ga in ((9, 0.16), (5, 0.22), (2, 0.30)):
                 o = off * scale
                 gp = _round_rect_pts(ix - o, iy - o, isz + 2 * o, isz + 2 * o, 5 * scale)
-                _draw_solid(gp, (GOLD_GLOW[0], GOLD_GLOW[1], GOLD_GLOW[2], ga * alpha))
+                _draw_solid(gp, (accent[0], accent[1], accent[2], ga * alpha))
 
     _ensure_icon_tex(t)
 
@@ -910,7 +1054,7 @@ def _draw_card(t, now, region, scale, shelf_h, style):
             fr_layer = _round_rect_pts(ix - (0.5 + o) * scale, iy - (0.5 + o) * scale,
                                        isz + (1.0 + 2 * o) * scale, isz + (1.0 + 2 * o) * scale,
                                        max(0.0, (3.8 + o * 0.5) * scale) if _rounded(style) else 0.0)
-            _draw_solid(fr_layer, (GOLD_GLOW[0], GOLD_GLOW[1], GOLD_GLOW[2], r_alpha * alpha))
+            _draw_solid(fr_layer, (accent[0], accent[1], accent[2], r_alpha * alpha))
     else:
         fr = _round_rect_pts(ix - 1 * scale, iy - 1 * scale,
                              isz + 2 * scale, isz + 2 * scale, (4 * scale) if _rounded(style) else 0.0)
@@ -921,7 +1065,7 @@ def _draw_card(t, now, region, scale, shelf_h, style):
     else:
         ib = _round_rect_pts(ix, iy, isz, isz, ir)
         _draw_vgrad(ib, iy, isz, ICON_BOTTOM, ICON_TOP, alpha)
-        star_col = GOLD_GLOW if rare else (0.78, 0.82, 0.88, 1.0)
+        star_col = accent if rare else (0.78, 0.82, 0.88, 1.0)
         _draw_glyph_center(0, "★", ix, iy, isz, isz, int(isz * 0.60), star_col, alpha)
 
     # --- текст
@@ -943,13 +1087,13 @@ def _draw_card(t, now, region, scale, shelf_h, style):
     top = Y + (H + block_h) / 2.0
 
     blf.size(ft, title_sz)
-    blf.color(ft, TITLE_COL[0], TITLE_COL[1], TITLE_COL[2], TITLE_COL[3] * alpha)
+    blf.color(ft, title_col[0], title_col[1], title_col[2], title_col[3] * alpha)
     ty = top - (15.3 * f * scale)
     blf.position(ft, tx, ty, 0)
     _draw_clipped(ft, t['title'], text_w)
 
     blf.size(fd, desc_sz)
-    blf.color(fd, DESC_COL[0], DESC_COL[1], DESC_COL[2], DESC_COL[3] * alpha)
+    blf.color(fd, desc_col[0], desc_col[1], desc_col[2], desc_col[3] * alpha)
     dy2 = ty - (20.7 * f * scale)
     for ln in dlines:
         blf.position(fd, tx, dy2, 0)
@@ -1067,6 +1211,14 @@ def _draw_xbox(t, now, region, scale, shelf_h):
 
     gpu.state.blend_set('ALPHA')
 
+    # Похідні відтінки кола-хвилі рахуються від основного кольору банера —
+    # так будь-який обраний колір зберігає той самий об'ємний пульс.
+    bg_col = style_color('XBOX', "bg")
+    bg_light = _scaled(bg_col, 1.126)
+    bg_dark = _scaled(bg_col, 0.877)
+    title_col = style_color('XBOX', "title")
+    desc_col = style_color('XBOX', "desc")
+
     ft = _font('XBOX', 'title')
     fd = _font('XBOX', 'desc')
     hsz = max(8, int(XBOX_TEXT_HDR * scale))
@@ -1076,7 +1228,7 @@ def _draw_xbox(t, now, region, scale, shelf_h):
     if k_open > 0.001:
         bx = cx - cr                     # банер починається від лівого краю кола
         bpts = _round_rect_pts(bx, cy - cr, bw, cd, cr)
-        _draw_solid(bpts, (XBOX_GREEN[0], XBOX_GREEN[1], XBOX_GREEN[2], XBOX_GREEN[3] * alpha))
+        _draw_solid(bpts, (bg_col[0], bg_col[1], bg_col[2], bg_col[3] * alpha))
 
         # --- текст банера, жорстко обрізаний межами банера (blf CLIPPING),
         #     щоб під час розкриття / згортання нічого не вилазило за картку
@@ -1100,11 +1252,11 @@ def _draw_xbox(t, now, region, scale, shelf_h):
             if a1 > 0.01:
                 dy1 = -slide_in - up_off * rise
                 blf.size(fd, hsz)
-                blf.color(fd, 1, 1, 1, a1)
+                blf.color(fd, desc_col[0], desc_col[1], desc_col[2], a1)
                 blf.position(fd, tx, cy + 4 * scale + dy1, 0)
                 _draw_clipped(fd, "Rare achievement unlocked" if t['rare'] else "Achievement unlocked", tw)
                 blf.size(ft, nsz)
-                blf.color(ft, 1, 1, 1, a1)
+                blf.color(ft, title_col[0], title_col[1], title_col[2], a1)
                 blf.position(ft, tx, cy - 17 * scale + dy1, 0)
                 _draw_clipped(ft, t['title'], tw)
 
@@ -1112,7 +1264,7 @@ def _draw_xbox(t, now, region, scale, shelf_h):
             if a2 > 0.01:
                 dy2 = dn_off * rise - slide_in
                 blf.size(fd, nsz)
-                blf.color(fd, 1, 1, 1, a2)
+                blf.color(fd, desc_col[0], desc_col[1], desc_col[2], a2)
                 blf.position(fd, tx, cy - 6 * scale - dy2, 0)
                 _draw_clipped(fd, t.get('desc', ""), tw)
 
@@ -1123,7 +1275,7 @@ def _draw_xbox(t, now, region, scale, shelf_h):
     if ca > 0.01:
         rr = cr * cs
         # (6) пульсуючі кола-хвилі ::before / ::after (scale_circle_1)
-        for delay, col in ((0.0, XBOX_GREEN_LIGHT), (0.1, XBOX_GREEN_DARK)):
+        for delay, col in ((0.0, bg_light), (0.1, bg_dark)):
             pp = -1.0
             if e >= delay and e < XBOX_T_IN:                 # пульс на початку
                 pp = (e - delay) / max(0.001, XBOX_T_IN)
@@ -1133,7 +1285,7 @@ def _draw_xbox(t, now, region, scale, shelf_h):
                 ps, po = _pulse_phase(pp)
                 _draw_ring_pulse(cx, cy, rr * (1.0 + 0.45 * ps), col, po * 0.85 * alpha)
 
-        _draw_circle(cx, cy, rr, (XBOX_GREEN[0], XBOX_GREEN[1], XBOX_GREEN[2], ca * alpha))
+        _draw_circle(cx, cy, rr, (bg_col[0], bg_col[1], bg_col[2], ca * alpha))
 
         isz = cd * 0.52 * cs
         # Іконка аддона на початку, далі кросфейд у трофей/діамант (CSS 19%→24%)
@@ -1382,19 +1534,40 @@ def invalidate_textures():
     перезавантажить зображення й створить текстури заново.
 
     Тости, що вже висять, теж чистимо: у кожного свій `icon_img`/`icon_tex` із
-    datablock'ів попереднього файлу.
+    datablock'ів попереднього файлу. Але НЕ ставимо icon_done=True: раніше так
+    і робилось, і картка, застукана перемиканням файлу, домальовувалась із
+    запасною зірочкою замість своєї іконки. Шлях до файлу іконки лежить у
+    самому тості (`icon_path`), тож датаблок просто перезавантажується у вже
+    новий bpy.data — див. _ensure_icon_tex.
+
+    Шрифти сюди ж: blf-шрифти, завантажені скриптом, Blender при читанні файлу
+    звільняє, а наш кеш лишався з мертвими id — blf.draw по такому id мовчки
+    не малює нічого, і текст ачивки зникав.
     """
     global _asset_tex, _mask_tex, _mask_failed
     _asset_tex = {}
     _mask_tex = None
     _mask_failed = False
+    invalidate_fonts()
     for t in list(_toasts) + list(_pending):
         try:
             t['icon_tex'] = None
             t['icon_img'] = None
-            t['icon_done'] = True     # без датаблоку відновлювати нічого
+            t['icon_done'] = False    # перезавантажимо з icon_path
         except Exception as _dbg_err:  # noqa: BLE001
             debug.log("toast.py:invalidate_textures", _dbg_err)
+
+
+def invalidate_fonts():
+    """Забуває завантажені blf-шрифти, щоб наступний _font() завантажив їх заново.
+
+    Свідомо БЕЗ blf.unload(): читання .blend вже звільнило ці шрифти, і id з
+    нашого кеша вказують у нікуди. Викликати на них unload щонайменше марно, а
+    якщо Blender встиг перевикористати той самий id — ще й зніс би чужий,
+    щойно завантажений шрифт.
+    """
+    _fonts.clear()
+    _font_paths_loaded.clear()
 
 
 def remove_handler():
@@ -1464,6 +1637,10 @@ def show(title, desc, rare=False, icon_path=None, sound_path=None,
         'title': title,
         'desc': desc,
         'rare': bool(rare),
+        # Шлях тримаємо поряд із датаблоком: якщо серед показу відкриють інший
+        # .blend, увесь bpy.data знесе разом з icon_img, і лише за шляхом
+        # картка зможе підняти свою іконку заново (див. invalidate_textures).
+        'icon_path': icon_path or "",
         'icon_img': icon_img,
         'icon_tex': None,
         'icon_done': False,

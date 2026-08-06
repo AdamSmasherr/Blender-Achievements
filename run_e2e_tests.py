@@ -1,5 +1,14 @@
 """
-Automated Top-Level Test Runner for Blender Achievements E2E Test Suite.
+Runs the headless test layer (tests/headless/): register/unregister
+lifecycle, real-filesystem storage, and scene-state achievement detectors —
+everything that needs a real bpy but not a window.
+
+This is one of three test layers in the repo:
+  - `pytest tests/unit` — pure logic, no Blender at all.
+  - this script            — real bpy, `blender --background`, no window.
+  - tests/live/            — needs a real window (viewport draw, watcher
+                              key events); driven through an MCP-connected
+                              Blender, not from here.
 
 Usage:
   1. From terminal / external Python:
@@ -14,7 +23,7 @@ import os
 import subprocess
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-TEST_RUNNER_SCRIPT = os.path.join(PROJECT_ROOT, "tests", "run_tests.py")
+TEST_RUNNER_SCRIPT = os.path.join(PROJECT_ROOT, "tests", "headless", "run_headless.py")
 
 BLENDER_POSSIBLE_PATHS = [
     r"D:\GOG\steamapps\common\Blender\blender.exe",
@@ -51,12 +60,25 @@ def main():
         in_blender = False
 
     if in_blender:
-        # Run tests directly inside Blender environment
-        if PROJECT_ROOT not in sys.path:
-            sys.path.insert(0, PROJECT_ROOT)
-        from tests.run_tests import run_all_tests
-        code = run_all_tests()
-        sys.exit(code)
+        # Run tests directly inside this Blender process. tests/headless/
+        # isn't a package (see run_headless.py's own sys.path handling —
+        # scripts handed to `blender --python` have no reliable
+        # __package__), so exec it rather than importing it.
+        with open(TEST_RUNNER_SCRIPT, "r", encoding="utf-8") as f:
+            code_text = f.read()
+        try:
+            exec(compile(code_text, TEST_RUNNER_SCRIPT, "exec"),
+                 {"__name__": "__main__", "__file__": TEST_RUNNER_SCRIPT})
+        except SystemExit:
+            raise
+        except Exception:
+            # A real crash in the suite itself (not a normal sys.exit from
+            # run_headless.main()) must still fail the process — Blender
+            # doesn't turn an uncaught exception from --python into a
+            # non-zero exit code on its own.
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
     else:
         # External runner: find Blender and launch test runner script in background mode
         blender_bin = find_blender()

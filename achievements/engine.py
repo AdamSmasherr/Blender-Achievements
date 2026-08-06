@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 from .storage import AchievementStorage
-from .achievements import ACHIEVEMENTS, AchievementDefinition
+from .registry import ACHIEVEMENTS, AchievementDefinition
 from . import toast
 from . import debug
 
@@ -49,6 +49,9 @@ class AchievementEngine:
         self._unlocked: Dict[str, dict] = {}
         self._stats: Dict[str, Any] = {}       # persistent cumulative counters/dates
         self._stats_dirty = False
+        self._previous_session: Optional[dict] = None
+        self._session_snapshot: Optional[dict] = None
+        self._session_seconds = 0
         # Ключі, зменшені навмисно (відкат Delete+Undo). Storage._merge бере
         # max() з диском, тож без цього списку зменшення не переживе флаш.
         self._stats_forced: set = set()
@@ -64,6 +67,12 @@ class AchievementEngine:
         self._stats = stats if isinstance(stats, dict) else {}
         self._stats_dirty = False
         self._stats_forced = set()
+        # Прочитати підсумок минулої сесії ТРЕБА тут, до першого запису: далі
+        # той самий ключ переписується цифрами поточної сесії.
+        prev = self._stats.get("last_session")
+        self._previous_session = dict(prev) if isinstance(prev, dict) else None
+        self._session_snapshot = None
+        self._session_seconds = 0
 
     def _persist(self) -> bool:
         """Writes unlocked + stats to disk and clears the dirty flag."""
@@ -91,6 +100,10 @@ class AchievementEngine:
             yield
         finally:
             self.storage._filepath = prev
+
+    # Публічне ім'я для зовнішнього коду (test-support helpers тощо), яким не
+    # місце читати приватний storage._filepath напряму.
+    using_filepath = _using_filepath
 
     def load_state(self, filepath: Optional[str] = None):
         """Loads state from custom filepath if provided, or storage filepath.
@@ -121,22 +134,16 @@ class AchievementEngine:
     # ----------------- Persistent cumulative stats (global achievements) -----------------
 
     def get_stat(self, key: str, default=0):
-        try:
-            return self._stats.get(key, default)
-        except Exception as _dbg_err:
-            debug.log("engine.py:85", _dbg_err)
-            return default
+        return debug.guarded_value("engine.py:get_stat", lambda: self._stats.get(key, default), default)
 
     def add_stat(self, key: str, amount: int = 1):
         """Increments a persistent counter (kept in RAM, flushed periodically) and
         checks any global achievements bound to that counter."""
         if not key or amount == 0:
             return
-        try:
-            self._stats[key] = int(self._stats.get(key, 0)) + amount
-        except Exception as _dbg_err:
-            debug.log("engine.py:95", _dbg_err)
-            self._stats[key] = amount
+        self._stats[key] = debug.guarded_value(
+            "engine.py:add_stat", lambda: int(self._stats.get(key, 0)) + amount, amount
+        )
         if amount < 0:
             # Навмисне зменшення має перебити більше значення на диску.
             self._stats_forced.add(key)
@@ -145,14 +152,11 @@ class AchievementEngine:
 
     def set_stat_max(self, key: str, value):
         """Stores value only if greater than the current stored value."""
-        try:
+        with debug.guarded("engine.py:set_stat_max"):
             if value > self._stats.get(key, 0):
                 self._stats[key] = value
                 self._stats_dirty = True
                 self._check_counter_achievements(key)
-        except Exception as _dbg_err:
-            debug.log("engine.py:107", _dbg_err)
-            pass
 
     def flush_stats(self):
         """Persists dirty counters to disk (called periodically / on save / on unregister)."""
@@ -161,10 +165,10 @@ class AchievementEngine:
 
     def _check_counter_achievements(self, counter_key: str):
         """Unlocks any global achievement whose counter has reached its threshold."""
-        try:
-            val = self._stats.get(counter_key, 0)
-        except Exception as _dbg_err:
-            debug.log("engine.py:119", _dbg_err)
+        val = debug.guarded_value(
+            "engine.py:_check_counter_achievements", lambda: self._stats.get(counter_key, 0), None
+        )
+        if val is None:
             return
         for aid, d in ACHIEVEMENTS.items():
             if getattr(d, "counter", None) == counter_key and not self.is_unlocked(aid):
@@ -188,6 +192,96 @@ class AchievementEngine:
         self._check_counter_achievements("streak")
         self._check_counter_achievements("distinct_days")
         self._persist()
+
+    # ----------------- Per-day journal & session recap -----------------
+
+    # Лічильники, дельту яких за сесію показує підсумок.
+    SESSION_COUNTERS = ("renders_total", "saves_total", "frames_total", "polygons_total")
+
+    @staticmethod
+    def _num(value) -> int:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0
+        return int(value)
+
+    @staticmethod
+    def _today() -> str:
+        from datetime import date
+        return date.today().isoformat()
+
+    def get_days(self) -> Dict[str, int]:
+        """Журнал `"YYYY-MM-DD" -> секунди роботи`. Порожній словник, якщо
+        його ще немає (свіже встановлення або щойно мігрований файл)."""
+        days = self._stats.get("days")
+        return days if isinstance(days, dict) else {}
+
+    def add_day_seconds(self, seconds: int):
+        """Доливає відпрацьований час у сьогоднішній запис журналу.
+
+        Свідомо не залежить від жодної ачивки. `uptime_seconds` перестає
+        рахуватись, щойно відкрито UNEMPLOYED_3 — для ачивки це розумна
+        економія, але календар після цього застигав би назавжди.
+        """
+        if seconds <= 0:
+            return
+        with debug.guarded("engine.py:add_day_seconds"):
+            days = self._stats.get("days")
+            if not isinstance(days, dict):
+                days = {}
+                self._stats["days"] = days
+            today = self._today()
+            days[today] = self._num(days.get(today)) + int(seconds)
+            self._stats_dirty = True
+
+    def begin_session(self):
+        """Знімає зріз лічильників, щоб підсумок міг показувати дельти.
+
+        Сесія — це процес Blender, а не файл: перемикання .blend нічого не
+        завершує. Значення минулої сесії вже підняті в пам'ять у _load_state.
+        """
+        snap = {k: self._num(self._stats.get(k)) for k in self.SESSION_COUNTERS}
+        snap["unlocked"] = len(self._unlocked) if isinstance(self._unlocked, dict) else 0
+        self._session_snapshot = snap
+        self._session_seconds = 0
+        self._stats["last_session"] = self.session_recap()
+        self._stats_dirty = True
+
+    def record_worked_seconds(self, seconds: int):
+        """Один тік відпрацьованого часу: годує і журнал днів, і підсумок.
+
+        Підсумок поточної сесії осідає в `stats["last_session"]` при кожному
+        тіку саме тому, що зловити момент виходу з Blender неможливо — API не
+        має хука на закриття. Наступний запуск просто читає те, що встигло
+        лягти на диск, і показує його як «минулу сесію».
+        """
+        if seconds <= 0:
+            return
+        self.add_day_seconds(seconds)
+        self._session_seconds += int(seconds)
+        if self._session_snapshot is not None:
+            self._stats["last_session"] = self.session_recap()
+        self._stats_dirty = True
+
+    def session_recap(self) -> Dict[str, int]:
+        """Скільки зроблено від початку цієї сесії. Усі нулі, поки сесія не
+        почалась — краще за від'ємні або гігантські дельти від порожнього зрізу."""
+        snap = self._session_snapshot
+        recap = {"seconds": int(self._session_seconds) if snap is not None else 0}
+        for k in self.SESSION_COUNTERS:
+            if snap is None:
+                recap[k] = 0
+            else:
+                recap[k] = max(0, self._num(self._stats.get(k)) - self._num(snap.get(k)))
+        if snap is None:
+            recap["unlocked"] = 0
+        else:
+            cur = len(self._unlocked) if isinstance(self._unlocked, dict) else 0
+            recap["unlocked"] = max(0, cur - self._num(snap.get("unlocked")))
+        return recap
+
+    def previous_session(self) -> Optional[Dict[str, int]]:
+        """Підсумок попереднього запуску Blender, або None якщо його немає."""
+        return self._previous_session
 
     def is_unlocked(self, ach_id: str) -> bool:
         """Returns True if the specified achievement is unlocked."""
@@ -249,7 +343,7 @@ class AchievementEngine:
 
     def reset_all(self) -> bool:
         """Resets all achievement progress and event tracking state."""
-        from .achievements import reset_tracking_state
+        from .session import reset_tracking_state
         reset_tracking_state()
         self._unlocked.clear()
         self._stats.clear()

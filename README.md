@@ -6,6 +6,16 @@ A native Blender addon that gamifies your workflow with achievements. 79 achieve
 
 - **79 achievements**  - session-scoped (things you do
 *this* session) and global/cumulative (persisted totals across all time).
+- **Activity calendar**: a GitHub-style contribution heatmap of the last 13
+weeks, showing how much time you spent with Blender open each day. Lives in
+the N-panel sidebar (above the achievements list) and in the addon
+preferences; click any day for an exact readout.
+
+<!-- Screenshot of the activity calendar goes here. Same upload trick as
+     below: open any issue on this repo, drag the PNG into the comment box,
+     copy the generated https://github.com/user-attachments/... URL, paste it
+     into an <img> tag here, close the draft without submitting. -->
+
 - **Three pop-up animation styles**, each with its own sound profile:
 
 <!-- The screenshots below are hosted on GitHub's CDN rather than committed to
@@ -23,7 +33,14 @@ A native Blender addon that gamifies your workflow with achievements. 79 achieve
 
 
 - **Сustomization**: mix any animation style with your own sound files,
-per-slot and master volume control. Export/import profiles as JSON to move them between machines.
+per-slot and master volume control. Export/import profiles as JSON to move
+them between machines. Every colour in the pop-up card (background, title,
+description, the rare-achievement glow) and every level of the activity
+calendar's heatmap is a colour picker in the preferences — pick your own
+palette or hit **Reset** to go back to the defaults.
+- **N-panel toggles**: show or hide the achievements list and the activity
+calendar independently in the sidebar, if you only want one of them (or
+neither, and just check progress from the preferences window).
 - Runs entirely off Blender’s own Python API — no external dependencies,
 no network access, no telemetry.
 
@@ -42,13 +59,14 @@ Both can be turned off in the add-on preferences.
 `blender_achievements.json` (next to it, a short-lived `.lock` file while
 saving). It holds unlocked achievements plus cumulative counters —
 total hours with Blender open, number of launches, days in a row, saves,
-renders, frames, polygons and similar tallies. That file is what makes
-global achievements survive a restart.
+renders, frames, polygons and similar tallies — including the per-day
+journal that feeds the activity calendar. That file is what makes global
+achievements (and the calendar) survive a restart.
 - **Reads/writes files you explicitly pick**: your own sound files for
 custom profiles, and the JSON you choose when using Export/Import Profiles.
 - **Never connects to the internet.** No account, no telemetry, no analytics,
 no data leaves your machine. The statistics above exist only in that local
-JSON file and can be wiped at any time with **Reset Progress** in the
+JSON file and can be wiped at any time with **Reset All Progress** in the
 preferences.
 
 ## Installation
@@ -68,12 +86,22 @@ Requires **Blender 4.4+**.
 python build.py
 ```
 
-## Configuring sounds & animation
+## Configuring sounds, animation & colours
 
 Addon preferences → **Profiles**: pick Steam / Xbox / PlayStation for the
 built-in look, or switch to **Custom** to build your own profile (any
 animation style + your own sound files per slot). Use **Export Profiles** /
 **Import Profiles** to carry your custom profiles to another machine.
+
+Addon preferences → **Colours**: the pop-up card's palette follows whichever
+style is active above (change the style there, and the colour fields update
+to match — there's no separate style picker here). Every colour on the card
+is editable — background gradient, title, description, and for rare
+achievements the accent colour used for the glow and icon frame. Hit
+**Preview** / **Preview Rare** to see the change live without earning a real
+achievement, or **Reset** to restore that style's default palette. The
+activity calendar's five heatmap levels (from "no activity" to "6+ hours")
+live in their own row of colour pickers right below, with their own Reset.
 
 ## Achievement list
 
@@ -144,7 +172,7 @@ animation style + your own sound files per slot). Use **Export Profiles** /
 
 | Achievement | Description |
 | --- | --- |
-| **Time Traveler** | Undo actions 50+ times in a row within one minute. |
+| **Time Traveler** | Undo actions 30+ times in a row within one minute. |
 | **Back from the dead** ⭐ | Successfully restore a project via Recover Auto Save after a crash. |
 | **Living on the Edge** | Work on a complex scene for over 2 hours without saving (Ctrl+S). |
 | **Add-on Collector** | Enable over 25 add-ons in the preferences. |

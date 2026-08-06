@@ -81,13 +81,51 @@ def _file_lock(lock_fp, timeout=3.0):
 # renamed, or the shape of a "stats" entry changes) in a way that needs a
 # migration step. `_migrate()` below is the place to add per-version
 # upgrade logic once that first happens.
-SCHEMA_VERSION = 1
+#   1 — baseline: flat scalar counters in "stats".
+#   2 — adds "stats.days" (per-day seconds) and "stats.last_session".
+SCHEMA_VERSION = 2
+
+# Stat keys holding a {sub-key: number} mapping instead of a plain number.
+# They need element-wise merging, see `_merge`.
+NESTED_MAX_STATS = ("days",)
+
+# Stat keys holding a dict that describes *this* process and must not be
+# element-wise merged with another instance's copy — last writer wins.
+OPAQUE_STATS = ("last_session",)
+
+
+def _sanitize_day_map(value) -> dict:
+    """Keeps only `"YYYY-MM-DD": number` pairs from a loaded day map.
+
+    The file is user-editable and shared with other Blender instances, so a
+    single hand-mangled entry must not take the whole calendar down with it.
+    """
+    if not isinstance(value, dict):
+        return {}
+    clean = {}
+    for k, v in value.items():
+        if not isinstance(k, str) or len(k) != 10 or k[4] != "-" or k[7] != "-":
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        if v < 0:
+            continue
+        clean[k] = v
+    return clean
 
 
 def _migrate(data: dict, from_version: int) -> dict:
     """Upgrades a loaded state dict from `from_version` to SCHEMA_VERSION.
-    No-op today (schema 1 is the baseline); add `if from_version < N:` steps
-    here as the schema evolves so old saved files keep working."""
+
+    Schema 2 introduced the per-day journal. There is no way to reconstruct
+    it for days that passed before the upgrade — the old format only kept
+    aggregates (`distinct_days`, `streak`) — so the calendar deliberately
+    starts empty and fills in from the upgrade onwards.
+    """
+    if from_version < 2:
+        stats = data.get("stats")
+        if isinstance(stats, dict) and "days" not in stats:
+            stats["days"] = {}
     return data
 
 
@@ -137,6 +175,8 @@ class AchievementStorage:
                 "unlocked": unlocked if isinstance(unlocked, dict) else {},
                 "stats": stats if isinstance(stats, dict) else {},
             }
+            if "days" in result["stats"]:
+                result["stats"]["days"] = _sanitize_day_map(result["stats"]["days"])
             if from_version < SCHEMA_VERSION:
                 result = _migrate(result, from_version)
                 result["version"] = SCHEMA_VERSION
@@ -158,6 +198,13 @@ class AchievementStorage:
         deliberately *decreased* (rolling back a Delete+Undo exploit) are
         written verbatim. Without it max() would restore the inflated on-disk
         value on the very next flush and the rollback would never stick.
+
+        `NESTED_MAX_STATS` keys (the per-day journal) hold a mapping rather
+        than a number, so they get the same max() treatment one level deeper:
+        the day sets are unioned and each day takes the larger of the two
+        totals. Without this branch the generic `else` below would hand the
+        whole calendar to whichever instance flushed last, silently dropping
+        days recorded by the other one.
         """
         unlocked = dict(disk.get("unlocked") or {})
         unlocked.update(ours.get("unlocked") or {})
@@ -167,6 +214,14 @@ class AchievementStorage:
         for k, v in (ours.get("stats") or {}).items():
             dv = stats.get(k)
             if k in forced:
+                stats[k] = v
+            elif k in NESTED_MAX_STATS:
+                merged_map = _sanitize_day_map(dv)
+                for sub_k, sub_v in _sanitize_day_map(v).items():
+                    prev = merged_map.get(sub_k)
+                    merged_map[sub_k] = max(sub_v, prev) if isinstance(prev, (int, float)) else sub_v
+                stats[k] = merged_map
+            elif k in OPAQUE_STATS:
                 stats[k] = v
             elif isinstance(v, (int, float)) and isinstance(dv, (int, float)):
                 stats[k] = max(v, dv)
