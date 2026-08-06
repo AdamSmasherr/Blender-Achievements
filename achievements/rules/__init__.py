@@ -58,8 +58,13 @@ def evaluate(trigger: str, ctx: RuleContext) -> list:
             # Heavy checks (full node-tree walks, n-gon scans) run at most
             # this often. The state they look for doesn't evaporate between
             # ticks, so a delayed check still catches it.
-            last = state.rule_last_eval.get(d.id, 0.0)
-            if (now - last) < d.interval:
+            #
+            # "Never evaluated" is None, not 0.0: time.monotonic() counts from
+            # boot on Linux, so on a machine that just started `now - 0.0` can
+            # be smaller than the interval — and the rule would be skipped as
+            # though it had just run.
+            last = state.rule_last_eval.get(d.id)
+            if last is not None and (now - last) < d.interval:
                 continue
             state.rule_last_eval[d.id] = now
         passed = debug.guarded_value(f"rules:{d.id}", lambda d=d: d.evaluate(ctx), False)

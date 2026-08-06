@@ -138,6 +138,13 @@ def test_a_raising_rule_does_not_take_out_the_rest_of_the_pass(monkeypatch, ctx)
 
 
 def test_interval_rules_are_not_re_evaluated_before_their_interval_elapses(monkeypatch, ctx):
+    """The first evaluation always runs, later ones inside the window don't.
+
+    "First" has to mean "no recorded timestamp", not "timestamp is 0" —
+    time.monotonic() counts from boot on Linux, so on a freshly booted
+    machine a zero default reads as "evaluated just now" and the rule never
+    runs at all. (Found by CI on a runner with under a minute of uptime.)
+    """
     from achievements.session import state
     state.rule_last_eval.clear()
     calls = []
