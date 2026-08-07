@@ -38,14 +38,6 @@ them between machines. Every colour in the pop-up card (background, title,
 description, the rare-achievement glow) is a colour picker in the
 preferences — pick your own palette or hit **Reset** to go back to the
 defaults.
-- **Icon colours**: recolour the achievement artwork itself — the tile
-behind an icon and the icon's own colour — and it updates everywhere: the
-pop-up card and the achievements list (sidebar and preferences) all draw
-from the same two settings. The icons are transparent white-and-grey
-artwork, and the colour is burned into them rather than painted over, so a
-tinted icon keeps its shading instead of turning into a flat silhouette.
-Every level of the activity calendar's heatmap is likewise a colour picker
-of its own.
 - **N-panel toggles**: show or hide the achievements list and the activity
 calendar independently in the sidebar, if you only want one of them (or
 neither, and just check progress from the preferences window).
