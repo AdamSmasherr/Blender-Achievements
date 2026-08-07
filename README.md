@@ -35,10 +35,17 @@ preferences; click any day for an exact readout.
 - **Сustomization**: mix any animation style with your own sound files,
 per-slot and master volume control. Export/import profiles as JSON to move
 them between machines. Every colour in the pop-up card (background, title,
-description, the rare-achievement glow), the achievement icon's own colour
-and backing tile, and every level of the activity calendar's heatmap is a
-colour picker in the preferences — pick your own palette or hit **Reset** to
-go back to the defaults.
+description, the rare-achievement glow) is a colour picker in the
+preferences — pick your own palette or hit **Reset** to go back to the
+defaults.
+- **Icon colours**: recolour the achievement artwork itself — the tile
+behind an icon and the icon's own colour — and it updates everywhere: the
+pop-up card and the achievements list (sidebar and preferences) all draw
+from the same two settings. The icons are transparent white-and-grey
+artwork, and the colour is burned into them rather than painted over, so a
+tinted icon keeps its shading instead of turning into a flat silhouette.
+Every level of the activity calendar's heatmap is likewise a colour picker
+of its own.
 - **N-panel toggles**: show or hide the achievements list and the activity
 calendar independently in the sidebar, if you only want one of them (or
 neither, and just check progress from the preferences window).
@@ -105,11 +112,13 @@ PlayStation style has no golden glow at all — trophies never had one — so
 neither the glow switch nor its colour appears while that style is active.)
 
 Below that, **Achievement Icon** sets the two colours the artwork itself is
-drawn with: the tile behind it, and the icon colour. The icons ship as
-transparent white-and-grey artwork, and the icon colour is *burned* into
-them (Photoshop's Linear Burn) rather than blended over — so a coloured icon
-keeps every bit of its shading instead of flattening into a silhouette.
-White leaves the artwork exactly as drawn.
+drawn with: the tile behind it, and the icon colour. Both apply everywhere
+an icon shows up — the pop-up card, the N-panel sidebar list, and the list
+in these preferences — so there's one place to set the look, not three. The
+icons ship as transparent white-and-grey artwork, and the icon colour is
+*burned* into them (Photoshop's Linear Burn) rather than blended over — so a
+coloured icon keeps every bit of its shading instead of flattening into a
+silhouette. White leaves the artwork exactly as drawn.
 
 The activity calendar's five heatmap levels (from "no activity" to "6+
 hours") live in their own row of colour pickers right below, with their own
