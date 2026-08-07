@@ -11,6 +11,7 @@ from .. import toast
 from .calendar import _calendar_colors_changed, draw_activity_calendar
 from .formatters import CALENDAR_COLORS, CALENDAR_LEVEL_LABELS, CALENDAR_LEVEL_SHORT
 from .helpers import ADDON_PACKAGE, _tag_redraw_all
+from .icons import request_rebuild as _request_icon_rebuild
 from .panels import draw_achievements_list
 from .widgets import _draw_sound_slots_grid
 
@@ -201,6 +202,23 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
         reset.operator("achievement.reset_colors", text="Reset",
                        icon='LOOP_BACK').target = active_style
 
+        # --- палітра іконки ачивки
+        # Спільна для всіх стилів: картинки одні й ті самі, і колір під них
+        # підбирають один раз, а не окремо під кожну анімацію.
+        ico = box.box()
+        ico.label(text="Achievement Icon", icon='IMAGE_RGB_ALPHA')
+        ico_grid = ico.grid_flow(row_major=True, columns=2, even_columns=True, align=False)
+        for key in toast.ICON_COLOR_KEYS:
+            ico_grid.prop(self, toast.icon_color_prop_name(key))
+        ico_hint = ico.row()
+        ico_hint.enabled = False
+        ico_hint.label(text="Icon colour burns into the artwork; white leaves it as drawn.",
+                       icon='INFO')
+        ico_reset = ico.row(align=True)
+        ico_reset.alignment = 'RIGHT'
+        ico_reset.operator("achievement.reset_colors", text="Reset",
+                           icon='LOOP_BACK').target = 'ICON'
+
         # --- палітра календаря активності
         cal = box.box()
         cal.label(text="Activity Calendar", icon='TIME')
@@ -230,9 +248,10 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
         col_s.prop(self, "enable_toast")
         col_s.prop(self, "toast_duration")
         style = toast._get_style()
-        # Золоте сяйво не використовується в Xbox-анімації
+        # Золоте сяйво є лише в Steam-картці: Xbox малює діамант, а трофеї
+        # PlayStation золотого ореолу не мають узагалі (toast.GLOW_STYLES).
         row_rg = col_s.row()
-        row_rg.enabled = (style != 'XBOX')
+        row_rg.enabled = (style in toast.GLOW_STYLES)
         row_rg.prop(self, "show_rare_glow")
         # Закруглення стосується лише Steam-стилю картки
         row_rc = col_s.row()
@@ -319,6 +338,17 @@ def _toast_colors_changed(self, context):
     _tag_redraw_all()
 
 
+def _icon_colors_changed(self, context):
+    """Колір іконок змінився.
+
+    Картка фарбує іконку шейдером і підхопить новий колір сама; прев'юшки
+    списку намальовані пікселями, тож їх треба перепекти — із затримкою, щоб
+    перетягування пікера не спинало інтерфейс (див. icons.request_rebuild).
+    """
+    _request_icon_rebuild()
+    _tag_redraw_all()
+
+
 def _install_color_props(cls):
     """Додає властивості кольорів у AddonPreferences циклом.
 
@@ -336,6 +366,14 @@ def _install_color_props(cls):
                 size=3, min=0.0, max=1.0, default=toast.STYLE_COLOR_DEFAULTS[style][key],
                 update=_toast_colors_changed,
             )
+    for key in toast.ICON_COLOR_KEYS:
+        ann[toast.icon_color_prop_name(key)] = bpy.props.FloatVectorProperty(
+            name=toast.ICON_COLOR_LABELS.get(key, key),
+            description=toast.ICON_COLOR_DESCRIPTIONS.get(key, ""),
+            subtype='COLOR_GAMMA',
+            size=3, min=0.0, max=1.0, default=toast.ICON_COLOR_DEFAULTS[key],
+            update=_icon_colors_changed,
+        )
     for i, rgb in enumerate(CALENDAR_COLORS):
         ann[f"cal_col_{i}"] = bpy.props.FloatVectorProperty(
             name=CALENDAR_LEVEL_LABELS[i],

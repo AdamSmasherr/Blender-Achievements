@@ -44,9 +44,15 @@ STEEL_FRAME    = (0.20, 0.23, 0.28, 1.0)       # тонка темна рамк�
 # рівно те, що стоїть у полі hex кольоропікера.
 STYLE_COLOR_KEYS = {
     'STEAM': ("bg_light", "bg_dark", "title", "desc", "accent"),
-    'PS':    ("bg_left", "bg_right", "title", "desc", "accent"),
+    # PlayStation свідомо без "accent": у трофеїв PS немає золотого сяйва
+    # навколо іконки, тож і кольору для нього нема що налаштовувати.
+    'PS':    ("bg_left", "bg_right", "title", "desc"),
     'XBOX':  ("bg", "title", "desc"),
 }
+
+# Стилі, у яких рідкісні ачивки взагалі мають золоте сяйво. Xbox малює свою
+# анімацію з діамантом, PlayStation — трофей; сяйво є тільки в Steam-картці.
+GLOW_STYLES = ('STEAM',)
 
 STYLE_LABELS = {'STEAM': "Steam", 'XBOX': "Xbox", 'PS': "PlayStation"}
 
@@ -85,7 +91,6 @@ STYLE_COLOR_DEFAULTS = {
         "bg_right": (0.1412, 0.1294, 0.1412),   # #242124
         "title":    (1.0000, 1.0000, 1.0000),   # #ffffff
         "desc":     (0.5800, 0.6200, 0.6800),   # #949eae
-        "accent":   (0.9882, 0.7176, 0.3059),   # #fcb74e
     },
     'XBOX': {
         "bg":       (0.2235, 0.5882, 0.0471),   # #39960c
@@ -95,6 +100,79 @@ STYLE_COLOR_DEFAULTS = {
 }
 
 _STYLE_COLOR_PREFIX = {'STEAM': "steam", 'PS': "ps", 'XBOX': "xbox"}
+
+# ------------------------------------------------------------------ палітра іконки
+# Іконки ачивок — прозорі webp, намальовані білим і сірими відтінками. Плитку
+# під ними і їхній відтінок задає код, а не сам файл, тож обидва кольори
+# налаштовуються, і той самий набір картинок працює під будь-яку тему.
+#
+# Відтінок накладається як Linear Burn з фотошопу: rgb = clamp(icon + tint - 1).
+# Це саме зсув, а не змішування, тому різниця між світлими й сірими ділянками
+# зберігається повністю — 50% opacity замість цього стягнув би їх до кольору
+# й з'їв контраст. Білий (дефолт) нічого не міняє: c + 1 - 1 = c.
+ICON_COLOR_KEYS = ("bg", "tint")
+
+ICON_COLOR_LABELS = {
+    "bg":   "Icon Background",
+    "tint": "Icon Colour",
+}
+
+ICON_COLOR_DESCRIPTIONS = {
+    "bg":   "Fill drawn behind the achievement icon (the icons themselves are transparent)",
+    "tint": "Colour burned into the icon artwork; white leaves it untouched",
+}
+
+ICON_COLOR_DEFAULTS = {
+    "bg":   (0.0750, 0.0860, 0.1060),   # темна плитка, як було до налаштувань
+    "tint": (1.0000, 1.0000, 1.0000),   # білий = без змін
+}
+
+
+def icon_color_prop_name(key):
+    """Ім'я властивості в AddonPreferences під колір іконки."""
+    return f"icon_col_{key}"
+
+
+def icon_color(key, alpha=1.0):
+    """Колір іконки як RGBA: значення з налаштувань або дефолт."""
+    rgb = ICON_COLOR_DEFAULTS.get(key)
+    if rgb is None:
+        return (1.0, 1.0, 1.0, alpha)
+    try:
+        prefs = get_preferences()
+        if prefs is not None:
+            value = getattr(prefs, icon_color_prop_name(key), None)
+            if value is not None:
+                rgb = (value[0], value[1], value[2])
+    except Exception as _dbg_err:  # noqa: BLE001
+        debug.log("toast.py:icon_color", _dbg_err)
+    return (rgb[0], rgb[1], rgb[2], alpha)
+
+
+def linear_burn(rgb, tint):
+    """Linear Burn для одного кольору: clamp(base + blend - 1).
+
+    Той самий вираз, що й у шейдері нижче; тримається тут, щоб прев'юшки
+    списку ачивок (achievements/ui/icons.py) фарбувались точно так само, як
+    картка, і два шляхи не розійшлись.
+    """
+    return tuple(min(1.0, max(0.0, rgb[i] + tint[i] - 1.0)) for i in range(3))
+
+
+def rare_glow_enabled(style=None):
+    """Чи малювати золоте сяйво навколо іконки рідкісної ачивки.
+
+    Стосується ЛИШЕ сяйва. Рідкісність сама по собі («Rare achievement
+    unlocked», окремий звук, золота рамка) від цього прапорця не залежить:
+    раніше він гасив ачивці ознаку rare цілком, і з вимкненим сяйвом
+    рідкісна ачивка ставала звичайною разом зі звуком.
+    """
+    if style is not None and style not in GLOW_STYLES:
+        return False
+    prefs = get_preferences()
+    if prefs is None:
+        return True
+    return bool(getattr(prefs, "show_rare_glow", True))
 
 # Фон Steam малюється з поправкою на гаму: зашита константа #1c2028 давно
 # зберігалась як 0.1098**2.2. Тримаємо це перетворення тут, щоб у налаштуваннях
@@ -196,6 +274,7 @@ _shader_smooth = None
 _shader_conic = None
 _shader_radial = None
 _shader_image_tint = None
+_shader_icon_burn = None
 
 # бінарні ресурси (маска сяйва, іконки Xbox, спрайт-лист блиску)
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
@@ -815,15 +894,67 @@ def _pulse_phase(p):
     return (1.0, 0.0)
 
 
-def _draw_icon_image(texture, x, y, w, h, alpha):
-    """Іконка ачивки — повна текстура з урахуванням прозорості картки.
+def _icon_burn_shader():
+    """Шейдер іконки: Linear Burn кольором + згасання разом із карткою.
 
-    Раніше тут стояв вбудований IMAGE-шейдер, який ігнорував `alpha`: картка
-    плавно виїжджала й згасала, а іконка стрибком з'являлась і зникала на
-    повній непрозорості. `_draw_image_uv` уже вміє тінтувати — це той самий
-    малюнок з u/v на всю текстуру.
+    Формула та сама, що в `linear_burn()`: clamp(icon.rgb + tint - 1). Альфа
+    множиться на прозорість картки й БІЛЬШЕ НІ НА ЩО — саме тому тут окремий
+    шейдер, а не `_image_shader`, який множить на альфу ще й RGB: іконки
+    зберігаються зі звичайною (straight) альфою, і таке множення затемнювало б
+    їх при згасанні та лишало темну облямівку по краю прозорих ділянок.
     """
-    _draw_image_uv(texture, x, y, w, h, alpha=alpha)
+    global _shader_icon_burn
+    if _shader_icon_burn is not None:
+        return _shader_icon_burn
+    try:
+        info = gpu.types.GPUShaderCreateInfo()
+        info.vertex_in(0, 'VEC2', 'pos')
+        info.vertex_in(1, 'VEC2', 'uv')
+        stage = gpu.types.GPUStageInterfaceInfo('icon_burn_iface')
+        stage.smooth('VEC2', 'v_uv')
+        info.vertex_out(stage)
+        info.push_constant('MAT4', 'ModelViewProjectionMatrix')
+        info.push_constant('VEC3', 'u_burn')
+        info.push_constant('FLOAT', 'u_alpha')
+        info.sampler(0, 'FLOAT_2D', 'image')
+        info.fragment_out(0, 'VEC4', 'fragColor')
+        info.vertex_source(
+            "void main() { v_uv = uv;"
+            " gl_Position = ModelViewProjectionMatrix * vec4(pos, 0.0, 1.0); }")
+        info.fragment_source(
+            "void main() {"
+            "  vec4 src = texture(image, v_uv);"
+            "  vec3 burned = clamp(src.rgb + u_burn - vec3(1.0), vec3(0.0), vec3(1.0));"
+            "  fragColor = vec4(burned, src.a * u_alpha);"
+            "}")
+        _shader_icon_burn = gpu.shader.create_from_info(info)
+    except Exception as _dbg_err:  # noqa: BLE001
+        debug.log("toast.py:_icon_burn_shader", _dbg_err)
+        _shader_icon_burn = None
+    return _shader_icon_burn
+
+
+def _draw_icon_image(texture, x, y, w, h, alpha):
+    """Іконка ачивки поверх плитки: прозорий webp, зафарбований Linear Burn.
+
+    Якщо шейдер зібрати не вдалось — малюємо картинку як є (без відтінку):
+    краще іконка без кольору, ніж порожня плитка.
+    """
+    tint = icon_color("tint")
+    sh = _icon_burn_shader()
+    if sh is None:
+        _draw_image_uv(texture, x, y, w, h, alpha=alpha)
+        return
+    coords = [(x, y), (x + w, y), (x + w, y + h),
+              (x, y), (x + w, y + h), (x, y + h)]
+    uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
+           (0.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    batch = batch_for_shader(sh, 'TRIS', {"pos": coords, "uv": uvs})
+    sh.bind()
+    sh.uniform_float("u_burn", (tint[0], tint[1], tint[2]))
+    sh.uniform_float("u_alpha", alpha)
+    sh.uniform_sampler("image", texture)
+    batch.draw(sh)
 
 
 def _init_shaders():
@@ -1014,9 +1145,14 @@ def _draw_card(t, now, region, scale, shelf_h, style):
 
     rare = t['rare']
     pal_style = 'PS' if is_ps else 'STEAM'
-    accent = style_color(pal_style, "accent")
+    # У PlayStation золотої палітри немає взагалі (див. GLOW_STYLES), тож і
+    # accent беремо зі Steam лише там, де його справді малюють.
+    accent = style_color('STEAM', "accent")
     title_col = style_color(pal_style, "title")
     desc_col = style_color(pal_style, "desc")
+    # Рідкісна ачивка лишається рідкісною (звук, заголовок, золота рамка)
+    # навіть із вимкненим сяйвом — прапорець гасить саме сяйво.
+    glow_on = rare and not is_ps and rare_glow_enabled(style)
     gpu.state.blend_set('ALPHA')
 
     isz = (ICON_SZ * (PS_H_FACTOR if is_ps else 1.0)) * scale
@@ -1037,7 +1173,7 @@ def _draw_card(t, now, region, scale, shelf_h, style):
                      style_color('STEAM', "bg_dark"))
 
     # --- рідкісний золотий бурст навколо іконки (не для PlayStation-стилю)
-    if rare and not is_ps:
+    if glow_on:
         if not _draw_icon_glow(icx, icy, isz, now, alpha, accent):
             for off, ga in ((9, 0.16), (5, 0.22), (2, 0.30)):
                 o = off * scale
@@ -1060,11 +1196,18 @@ def _draw_card(t, now, region, scale, shelf_h, style):
                              isz + 2 * scale, isz + 2 * scale, (4 * scale) if _rounded(style) else 0.0)
         _draw_solid(fr, (STEEL_FRAME[0], STEEL_FRAME[1], STEEL_FRAME[2], alpha))
 
+    # --- плитка під іконкою + сама іконка
+    # Фон малюється ЗАВЖДИ: картинки прозорі, і колір під ними — налаштування,
+    # а не частина файлу. Ачивка без картинки (Out of Memory) лишається просто
+    # порожньою плиткою — у цьому її жарт.
+    ib = _round_rect_pts(ix, iy, isz, isz, ir)
+    _draw_solid(ib, icon_color("bg", alpha))
+
     if t.get('icon_tex') is not None:
         _draw_icon_image(t['icon_tex'], ix, iy, isz, isz, alpha)
-    else:
-        ib = _round_rect_pts(ix, iy, isz, isz, ir)
-        _draw_vgrad(ib, iy, isz, ICON_BOTTOM, ICON_TOP, alpha)
+    elif t.get('icon_path'):
+        # Файл був, але не завантажився — показуємо зірочку, щоб порожню
+        # плитку не сплутати з навмисно безіконною ачивкою.
         star_col = accent if rare else (0.78, 0.82, 0.88, 1.0)
         _draw_glyph_center(0, "★", ix, iy, isz, isz, int(isz * 0.60), star_col, alpha)
 
@@ -1573,7 +1716,7 @@ def invalidate_fonts():
 def remove_handler():
     global _draw_handle, _pending, _shader_uniform, _shader_smooth
     global _shader_conic, _shader_radial, _shader_image_tint, _mask_tex, _mask_failed
-    global _asset_tex, _last_spawn
+    global _shader_icon_burn, _asset_tex, _last_spawn
     _pending.clear()
     _toasts.clear()
     _asset_tex = {}
@@ -1598,6 +1741,7 @@ def remove_handler():
     _shader_conic = None
     _shader_radial = None
     _shader_image_tint = None
+    _shader_icon_burn = None
     _mask_tex = None
     _mask_failed = False
 
@@ -1615,8 +1759,11 @@ def show(title, desc, rare=False, icon_path=None, sound_path=None,
             return
         if not getattr(prefs, "enable_sound", True):
             sound_path = None
-        if not getattr(prefs, "show_rare_glow", True):
-            rare = False
+        # show_rare_glow тут свідомо НЕ чіпає `rare`. Раніше вимкнене сяйво
+        # стирало ознаку рідкісності на вході, і разом із сяйвом зникали
+        # рідкісний звук, заголовок «Rare achievement unlocked» і золота
+        # рамка — «Preview Rare» показував звичайну ачивку. Прапорець
+        # перевіряється там, де малюється саме сяйво (rare_glow_enabled).
 
     duration = getattr(prefs, "toast_duration", T_HOLD) if prefs is not None else T_HOLD
 

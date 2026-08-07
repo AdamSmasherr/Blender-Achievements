@@ -36,6 +36,17 @@ TRIGGERS = (DEPSGRAPH, TIMER, FRAME_CHANGE, RENDER_COMPLETE, SAVE, LOAD,
             COUNTER, MANUAL)
 
 
+# --- Icons ----------------------------------------------------------------
+# `icon` names the artwork file's stem; the extension and the file naming
+# convention live in one place (engine._resolve_icon_path). Left as None, the
+# stem is the achievement's title, which is how most of them are named.
+#
+# NO_ICON is different from None: it means "this achievement is deliberately
+# drawn without artwork", and the pop-up shows the bare tinted background —
+# see "Out of Memory", whose joke is an icon that looks like it failed to load.
+NO_ICON = ""
+
+
 @dataclass
 class AchievementDefinition:
     """One achievement: what it is, and — once `bind()` has run — how it is won.
@@ -317,6 +328,9 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
         description="Trigger a render error due to running out of GPU memory.",
         rare=True,
         category="Lighting & Rendering",
+        # Навмисно без картинки: ачивка про брак пам'яті показує порожню
+        # плитку, ніби іконка не завантажилась. У цьому й жарт.
+        icon=NO_ICON,
     ),
     "SPEED_BLUR": AchievementDefinition(
         id="SPEED_BLUR",
@@ -447,7 +461,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
         description="Leave Blender running for 4 hours without doing anything.",
         rare=True,
         category="Workflow & Disasters",
-        icon="What am I doing.png",
+        icon="What am I doing",
     ),
 
     # ============================ GLOBAL (CUMULATIVE) ACHIEVEMENTS ============================
@@ -456,51 +470,51 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
         id="SHAPE_SHIFTER_1", title="Shape Shifter I",
         description="Create 5 shape keys in total.",
         category="Milestones", counter="shapekeys_total", threshold=5,
-        icon="Shape Shifter_I.png"),
+        icon="Shape Shifter_I"),
     "SHAPE_SHIFTER_2": AchievementDefinition(
         id="SHAPE_SHIFTER_2", title="Shape Shifter II",
         description="Create 25 shape keys in total.",
         category="Milestones", counter="shapekeys_total", threshold=25,
-        icon="Shape Shifter_II.png"),
+        icon="Shape Shifter_II"),
     "SHAPE_SHIFTER_3": AchievementDefinition(
         id="SHAPE_SHIFTER_3", title="Shape Shifter III",
         description="Create 50 shape keys in total.",
         rare=True, category="Milestones", counter="shapekeys_total", threshold=50,
-        icon="Shape Shifter_III.png"),
+        icon="Shape Shifter_III"),
 
     # Good Habit — total manual saves
     "GOOD_HABIT_1": AchievementDefinition(
         id="GOOD_HABIT_1", title="Good Habit I",
         description="Save your project 100 times in total.",
         category="Milestones", counter="saves_total", threshold=100,
-        icon="Good Habit_I.png"),
+        icon="Good Habit_I"),
     "GOOD_HABIT_2": AchievementDefinition(
         id="GOOD_HABIT_2", title="Good Habit II",
         description="Save your project 1,000 times in total.",
         category="Milestones", counter="saves_total", threshold=1000,
-        icon="Good Habit_II.png"),
+        icon="Good Habit_II"),
     "GOOD_HABIT_3": AchievementDefinition(
         id="GOOD_HABIT_3", title="Good Habit III",
         description="Save your project 10,000 times in total.",
         rare=True, category="Milestones", counter="saves_total", threshold=10000,
-        icon="Good Habit_III.png"),
+        icon="Good Habit_III"),
 
     # NASA Computer — total completed renders
     "NASA_COMPUTER_1": AchievementDefinition(
         id="NASA_COMPUTER_1", title="NASA Computer I",
         description="Complete 100 renders in total.",
         category="Milestones", counter="renders_total", threshold=100,
-        icon="NASA Computer_I.png"),
+        icon="NASA Computer_I"),
     "NASA_COMPUTER_2": AchievementDefinition(
         id="NASA_COMPUTER_2", title="NASA Computer II",
         description="Complete 1,000 renders in total.",
         category="Milestones", counter="renders_total", threshold=1000,
-        icon="NASA Computer_II.png"),
+        icon="NASA Computer_II"),
     "NASA_COMPUTER_3": AchievementDefinition(
         id="NASA_COMPUTER_3", title="NASA Computer III",
         description="Complete 10,000 renders in total.",
         rare=True, category="Milestones", counter="renders_total", threshold=10000,
-        icon="NASA Computer_III.png"),
+        icon="NASA Computer_III"),
 
     # Feature Film — total rendered frames
     "FEATURE_FILM": AchievementDefinition(
@@ -513,17 +527,17 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
         id="CUBE_GENOCIDE_1", title="Cube Genocide I",
         description="Delete the default cube 10 times in total.",
         category="Milestones", counter="cubes_deleted", threshold=10,
-        icon="Cube Genocide_I.png"),
+        icon="Cube Genocide_I"),
     "CUBE_GENOCIDE_2": AchievementDefinition(
         id="CUBE_GENOCIDE_2", title="Cube Genocide II",
         description="Delete the default cube 100 times in total.",
         category="Milestones", counter="cubes_deleted", threshold=100,
-        icon="Cube Genocide_II.png"),
+        icon="Cube Genocide_II"),
     "CUBE_GENOCIDE_3": AchievementDefinition(
         id="CUBE_GENOCIDE_3", title="Cube Genocide III",
         description="Delete the default cube 1,000 times in total.",
         rare=True, category="Milestones", counter="cubes_deleted", threshold=1000,
-        icon="Cube Genocide_III.png"),
+        icon="Cube Genocide_III"),
 
     # Monkey Business — total Suzannes added
     "MONKEY_BUSINESS": AchievementDefinition(
@@ -572,17 +586,17 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
         id="UNEMPLOYED_1", title="Unemployed I",
         description="Spend 10 hours in Blender in total.",
         category="Milestones", counter="uptime_seconds", threshold=36000,
-        icon="Unemployed_I.png"),
+        icon="Unemployed_I"),
     "UNEMPLOYED_2": AchievementDefinition(
         id="UNEMPLOYED_2", title="Unemployed II",
         description="Spend 100 hours in Blender in total.",
         category="Milestones", counter="uptime_seconds", threshold=360000,
-        icon="Unemployed_II.png"),
+        icon="Unemployed_II"),
     "UNEMPLOYED_3": AchievementDefinition(
         id="UNEMPLOYED_3", title="Unemployed III",
         description="Spend 1,000 hours in Blender in total.",
         rare=True, category="Milestones", counter="uptime_seconds", threshold=3600000,
-        icon="Unemployed_III.png"),
+        icon="Unemployed_III"),
 
     # Sculpt Sanctuary — total time in Sculpt Mode (seconds)
     "SCULPT_SANCTUARY": AchievementDefinition(
@@ -595,17 +609,17 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
         id="LOYALTY_1", title="Loyalty I",
         description="Launch Blender 100 times.",
         category="Milestones", counter="launches", threshold=100,
-        icon="Loyalty_I.png"),
+        icon="Loyalty_I"),
     "LOYALTY_2": AchievementDefinition(
         id="LOYALTY_2", title="Loyalty II",
         description="Launch Blender 500 times.",
         category="Milestones", counter="launches", threshold=500,
-        icon="Loyalty_II.png"),
+        icon="Loyalty_II"),
     "LOYALTY_3": AchievementDefinition(
         id="LOYALTY_3", title="Loyalty III",
         description="Launch Blender 1,000 times.",
         rare=True, category="Milestones", counter="launches", threshold=1000,
-        icon="Loyalty_III.png"),
+        icon="Loyalty_III"),
 
     # The Long Haul — a single render longer than 24 hours (event, not counter)
     "THE_LONG_HAUL": AchievementDefinition(

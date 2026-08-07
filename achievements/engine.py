@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 from .storage import AchievementStorage
-from .registry import ACHIEVEMENTS, AchievementDefinition
+from .registry import ACHIEVEMENTS, NO_ICON, AchievementDefinition
 from . import toast
 from . import debug
 
@@ -20,12 +20,25 @@ SOUND_PATH = os.path.join(_ADDON_DIR, "assets", "standart.wav")
 ICON_DIR = os.path.join(_ADDON_DIR, "icons")
 
 
+# Іконки лежать як "<stem>_.webp" — webp заради розміру (весь набір важить
+# менше, ніж раніше десяток png) і заради прозорості: фон і відтінок картинки
+# малює код, а не сам файл. Підкреслення в кінці — частина імен, з якими
+# експортувався набір; тримаємо конвенцію в одному місці, а не в 79 полях.
+ICON_SUFFIX = "_.webp"
+
+
 def _resolve_icon_path(ach_def) -> Optional[str]:
-    """Returns the icon file for an achievement (icons/<icon or title>.png) or None."""
+    """Шлях до картинки ачивки (icons/<stem>_.webp), або None.
+
+    None означає «малюємо без картинки»: або її свідомо немає
+    (`icon=registry.NO_ICON`), або файл не знайшовся.
+    """
     if not ach_def:
         return None
-    fname = getattr(ach_def, "icon", None) or f"{ach_def.title}.png"
-    candidate = os.path.join(ICON_DIR, fname)
+    stem = getattr(ach_def, "icon", None)
+    if stem == NO_ICON:
+        return None
+    candidate = os.path.join(ICON_DIR, f"{stem or ach_def.title}{ICON_SUFFIX}")
     return candidate if os.path.exists(candidate) else None
 
 

@@ -244,6 +244,10 @@ class ACHIEVEMENT_OT_reset_colors(bpy.types.Operator):
         if self.target == 'CALENDAR':
             for i, rgb in enumerate(CALENDAR_COLORS):
                 setattr(prefs, f"cal_col_{i}", rgb)
+        elif self.target == 'ICON':
+            for key in toast.ICON_COLOR_KEYS:
+                setattr(prefs, toast.icon_color_prop_name(key),
+                        toast.ICON_COLOR_DEFAULTS[key])
         elif self.target in toast.STYLE_COLOR_KEYS:
             for key in toast.STYLE_COLOR_KEYS[self.target]:
                 setattr(prefs, toast.color_prop_name(self.target, key),
