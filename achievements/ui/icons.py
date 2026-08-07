@@ -122,31 +122,45 @@ def _build_preview(pcoll, ach_id, path, bg, tint):
     return bool(debug.guarded_value(f"ui/icons.py:_build_preview/{ach_id}", _work, False))
 
 
+def _bake_all():
+    """Збирає нову колекцію прев'юшок у поточних кольорах, або None."""
+    try:
+        import bpy.utils.previews
+        pcoll = bpy.utils.previews.new()
+    except Exception as _dbg_err:  # noqa: BLE001
+        debug.log("ui/icons.py:_bake_all/new", _dbg_err)
+        return None
+
+    bg = toast.icon_color("bg")
+    tint = toast.icon_color("tint")
+    for ach_id, ach_def in registry.ACHIEVEMENTS.items():
+        icon_path = engine._resolve_icon_path(ach_def)
+        if icon_path and not os.path.exists(icon_path):
+            icon_path = None
+        # Ачивка без картинки (Out of Memory) все одно отримує плитку —
+        # порожня плитка і є її «іконкою».
+        if not _build_preview(pcoll, ach_id, icon_path, bg, tint) and icon_path:
+            # Запасний шлях: краще нефарбована, але жива іконка, ніж жодної.
+            with debug.guarded(f"ui/icons.py:_bake_all/load/{ach_id}"):
+                pcoll.load(ach_id, icon_path, 'IMAGE')
+    return pcoll
+
+
 def get_custom_icons():
-    global _custom_icons
+    """Колекція прев'юшок, або None поки вона ще не спечена.
+
+    САМА НІЧОГО НЕ ПЕЧЕ. Пекти доводиться з файлів — це читання й запис у
+    bpy.data, — а викликається ця функція з `draw()` панелі. У частині
+    контекстів (старт Blender, завантаження файлу, скасування дії) такий
+    доступ там не дозволений: випікання тихо падало, спрацьовував запасний
+    `pcoll.load()`, і в кеші назавжди осідали НЕфарбовані іконки — рівно та
+    поведінка, через яку колір у списку не змінювався.
+
+    Тепер випікання йде з таймера, тобто в безпечному контексті, а панель
+    один кадр малює стандартну іконку замість власної.
+    """
     if _custom_icons is None:
-        try:
-            import bpy.utils.previews
-            pcoll = bpy.utils.previews.new()
-            bg = toast.icon_color("bg")
-            tint = toast.icon_color("tint")
-            for ach_id, ach_def in registry.ACHIEVEMENTS.items():
-                icon_path = engine._resolve_icon_path(ach_def)
-                if icon_path and not os.path.exists(icon_path):
-                    icon_path = None
-                # Ачивка без картинки (Out of Memory) все одно отримує плитку —
-                # порожня плитка і є її «іконкою».
-                if not _build_preview(pcoll, ach_id, icon_path, bg, tint):
-                    # Запасний шлях: без numpy лишається хоч нефарбована,
-                    # але жива іконка.
-                    if icon_path:
-                        try:
-                            pcoll.load(ach_id, icon_path, 'IMAGE')
-                        except Exception:
-                            pass
-            _custom_icons = pcoll
-        except Exception:
-            _custom_icons = None
+        request_rebuild(delay=0.0)
     return _custom_icons
 
 
@@ -162,19 +176,27 @@ def clear_custom_icons():
 
 
 def _rebuild_now():
-    global _rebuild_pending
+    """Пече нову колекцію і підміняє нею стару. Викликається лише з таймера."""
+    global _custom_icons, _rebuild_pending
     _rebuild_pending = False
+    fresh = debug.guarded_value("ui/icons.py:_rebuild_now", _bake_all, None)
+    if fresh is None:
+        return None
+    # Стару колекцію прибираємо ТІЛЬКИ коли нова готова: інакше між цими
+    # двома моментами панель малювалась би без іконок.
     clear_custom_icons()
+    _custom_icons = fresh
     _tag_redraw_all()
     return None      # одноразовий таймер
 
 
-def request_rebuild():
-    """Перепекти іконки, коли користувач відпустить колірний пікер.
+def request_rebuild(delay=_REBUILD_DELAY):
+    """Перепекти іконки поза малюванням панелі.
 
-    Прев'юшки лишаються старими до спрацювання таймера — це навмисно: краще
-    показати колір, що відстає на третину секунди, ніж підвісити інтерфейс на
-    кожному русі миші.
+    Затримка за замовчуванням — щоб перетягування колірного пікера не
+    спинало інтерфейс: доки таймер не спрацював, список показує попередні
+    (ще правильні) прев'юшки. `delay=0` для першої побудови, коли показувати
+    ще нічого.
     """
     global _rebuild_pending
     if _rebuild_pending:
@@ -182,4 +204,4 @@ def request_rebuild():
     _rebuild_pending = True
     with debug.guarded("ui/icons.py:request_rebuild"):
         if not bpy.app.timers.is_registered(_rebuild_now):
-            bpy.app.timers.register(_rebuild_now, first_interval=_REBUILD_DELAY)
+            bpy.app.timers.register(_rebuild_now, first_interval=delay)

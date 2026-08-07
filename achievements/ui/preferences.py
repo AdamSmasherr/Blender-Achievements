@@ -210,10 +210,6 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
         ico_grid = ico.grid_flow(row_major=True, columns=2, even_columns=True, align=False)
         for key in toast.ICON_COLOR_KEYS:
             ico_grid.prop(self, toast.icon_color_prop_name(key))
-        ico_hint = ico.row()
-        ico_hint.enabled = False
-        ico_hint.label(text="Icon colour burns into the artwork; white leaves it as drawn.",
-                       icon='INFO')
         ico_reset = ico.row(align=True)
         ico_reset.alignment = 'RIGHT'
         ico_reset.operator("achievement.reset_colors", text="Reset",

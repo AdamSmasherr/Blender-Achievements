@@ -10,6 +10,7 @@ import bpy
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 
 from .. import engine
+from .. import registry
 from .. import sounds
 from .. import toast
 from .formatters import CALENDAR_COLORS
@@ -63,21 +64,29 @@ class ACHIEVEMENT_OT_test_toast(bpy.types.Operator):
     bl_label = "Test Notification"
     bl_description = "Show a test viewport achievement notification"
 
+    # Прев'ю показує справжню іконку — інакше картка з порожньою плиткою не
+    # давала побачити ні відтінок, ні фон, які саме тут і налаштовують.
+    PREVIEW_ICON_ID = "LIVE_TO_DIE_ANOTHER_DAY"
+
     rare: bpy.props.BoolProperty(name="Rare Golden Glow", default=True)
 
     def execute(self, context):
+        icon_path = engine._resolve_icon_path(
+            registry.ACHIEVEMENTS.get(self.PREVIEW_ICON_ID))
         # sound_path не передаємо — звук візьметься зі схеми (пресет/профіль).
         if self.rare:
             toast.show(
                 "Legendary Unlock",
                 "You did something truly rare.",
                 rare=True,
+                icon_path=icon_path,
             )
         else:
             toast.show(
                 "Winner",
                 "Standard achievement unlocked.",
                 rare=False,
+                icon_path=icon_path,
             )
         return {'FINISHED'}
 
