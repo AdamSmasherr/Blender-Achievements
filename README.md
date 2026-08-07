@@ -99,18 +99,12 @@ to match — there's no separate style picker here). Every colour on the card
 is editable — background gradient, title, description, and for rare
 achievements the accent colour used for the glow and icon frame. Hit
 **Preview** / **Preview Rare** to see the change live without earning a real
-achievement, or **Reset** to restore that style's default palette. (The
-PlayStation style has no golden glow at all — trophies never had one — so
-neither the glow switch nor its colour appears while that style is active.)
+achievement, or **Reset** to restore that style's default palette.
 
 Below that, **Achievement Icon** sets the two colours the artwork itself is
 drawn with: the tile behind it, and the icon colour. Both apply everywhere
 an icon shows up — the pop-up card, the N-panel sidebar list, and the list
-in these preferences — so there's one place to set the look, not three. The
-icons ship as transparent white-and-grey artwork, and the icon colour is
-*burned* into them (Photoshop's Linear Burn) rather than blended over — so a
-coloured icon keeps every bit of its shading instead of flattening into a
-silhouette. White leaves the artwork exactly as drawn.
+in these preferences — so there's one place to set the look, not three.
 
 The activity calendar's five heatmap levels (from "no activity" to "6+
 hours") live in their own row of colour pickers right below, with their own
