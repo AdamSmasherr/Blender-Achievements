@@ -35,10 +35,21 @@ _PREVIEW_PX = 128
 # не спрацював, список показує попередні (ще правильні) прев'юшки.
 _REBUILD_DELAY = 0.3
 _rebuild_pending = False
+_baked_colors = None      # кольори, у яких спечена поточна колекція
 
 
-def _load_pixels(path):
-    """RGBA-пікселі файлу як numpy-масив (h, w, 4), або None.
+def _current_colors():
+    """Кольори, які визначають вигляд іконок — ключ кешу прев'юшок."""
+    return (tuple(toast.icon_color("bg")[:3]), tuple(toast.icon_color("tint")[:3]))
+
+
+def _load_pixels(path, target=_PREVIEW_PX):
+    """RGBA-пікселі файлу як numpy-масив (h, w, 4), зменшені до `target`.
+
+    Зменшує сам Blender (`Image.scale`), а не numpy: те саме усереднення в
+    C коштує вдвічі менше, ніж найакуратніший numpy-варіант, і заразом
+    учетверо скорочує `foreach_get` — читаємо 128², а не 256². Різниця в
+    результаті — 2/255 у середньому, тобто непомітна.
 
     'Non-Color' — щоб Blender віддав значення як вони лежать у файлі, без
     лінеаризації: прев'ю зберігає їх у тому ж вигляді (перевірено —
@@ -52,6 +63,10 @@ def _load_pixels(path):
         w, h = img.size
         if w <= 0 or h <= 0:
             return None
+        if target and max(w, h) > target:
+            k = target / float(max(w, h))          # пропорції зберігаємо
+            img.scale(max(1, int(round(w * k))), max(1, int(round(h * k))))
+            w, h = img.size
         buf = np.empty(w * h * 4, dtype=np.float32)
         img.pixels.foreach_get(buf)
         return buf.reshape(h, w, 4)
@@ -61,28 +76,6 @@ def _load_pixels(path):
                 bpy.data.images.remove(img, do_unlink=True)
             except Exception as _dbg_err:  # noqa: BLE001
                 debug.log("ui/icons.py:_load_pixels/cleanup", _dbg_err)
-
-
-def _downsample(px, target=_PREVIEW_PX):
-    """Зменшує зображення цілим кратним, усереднюючи блоки 2x2 і далі.
-
-    Кольори усереднюються З ВАГОЮ АЛЬФИ: без цього повністю прозорі пікселі
-    (у них RGB довільний) підмішувались би у краї й давали облямівку.
-    """
-    import numpy as np
-    h, w = px.shape[:2]
-    k = min(h // target, w // target) if target else 1
-    if k < 2:
-        return px
-    h2, w2 = (h // k) * k, (w // k) * k
-    blocks = px[:h2, :w2].reshape(h2 // k, k, w2 // k, k, 4)
-    a = blocks[..., 3:4]
-    a_sum = a.sum(axis=(1, 3))
-    rgb = (blocks[..., :3] * a).sum(axis=(1, 3))
-    out = np.empty((h2 // k, w2 // k, 4), dtype=np.float32)
-    out[..., :3] = np.divide(rgb, a_sum, out=np.zeros_like(rgb), where=a_sum > 1e-6)
-    out[..., 3] = a.mean(axis=(1, 3))[..., 0]
-    return out
 
 
 def _composite(px, bg, tint):
@@ -114,7 +107,7 @@ def _build_preview(pcoll, ach_id, path, bg, tint):
     """Пече одну прев'юшку. True, якщо вдалось."""
     def _work():
         px = _load_pixels(path) if path else None
-        tile = _composite(_downsample(px), bg, tint) if px is not None else _flat_tile(bg)
+        tile = _composite(px, bg, tint) if px is not None else _flat_tile(bg)
         prev = pcoll.new(ach_id)
         prev.image_size = (tile.shape[1], tile.shape[0])
         prev.image_pixels_float.foreach_set(tile.ravel())
@@ -177,8 +170,11 @@ def clear_custom_icons():
 
 def _rebuild_now():
     """Пече нову колекцію і підміняє нею стару. Викликається лише з таймера."""
-    global _custom_icons, _rebuild_pending
+    global _custom_icons, _rebuild_pending, _baked_colors
     _rebuild_pending = False
+    colors = _current_colors()
+    if _custom_icons is not None and colors == _baked_colors:
+        return None                    # кольори ті самі — пекти нема чого
     fresh = debug.guarded_value("ui/icons.py:_rebuild_now", _bake_all, None)
     if fresh is None:
         return None
@@ -186,6 +182,7 @@ def _rebuild_now():
     # двома моментами панель малювалась би без іконок.
     clear_custom_icons()
     _custom_icons = fresh
+    _baked_colors = colors
     _tag_redraw_all()
     return None      # одноразовий таймер
 
@@ -193,15 +190,17 @@ def _rebuild_now():
 def request_rebuild(delay=_REBUILD_DELAY):
     """Перепекти іконки поза малюванням панелі.
 
-    Затримка за замовчуванням — щоб перетягування колірного пікера не
-    спинало інтерфейс: доки таймер не спрацював, список показує попередні
-    (ще правильні) прев'юшки. `delay=0` для першої побудови, коли показувати
-    ще нічого.
+    Кожен виклик ПЕРЕЗАПУСКАЄ відлік. Колірний пікер шле update на кожен рух
+    миші, а перепікання всіх іконок — сотня з гаком мілісекунд; якби відлік
+    не перезапускався, воно спрацьовувало б раз за раз посеред перетягування
+    і смикало б інтерфейс. Так воно чекає, поки користувач зупиниться, і
+    пече рівно один раз. Доки чекає — список показує попередні прев'юшки.
+
+    `delay=0` для найпершої побудови, коли показувати ще нічого.
     """
     global _rebuild_pending
-    if _rebuild_pending:
-        return
-    _rebuild_pending = True
     with debug.guarded("ui/icons.py:request_rebuild"):
-        if not bpy.app.timers.is_registered(_rebuild_now):
-            bpy.app.timers.register(_rebuild_now, first_interval=delay)
+        if bpy.app.timers.is_registered(_rebuild_now):
+            bpy.app.timers.unregister(_rebuild_now)
+        bpy.app.timers.register(_rebuild_now, first_interval=delay)
+        _rebuild_pending = True
