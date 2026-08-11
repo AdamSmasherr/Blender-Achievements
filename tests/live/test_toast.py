@@ -19,17 +19,17 @@ tester's real preferences afterwards — see common.muted_sounds/force_prefs.
 from common import expect, force_prefs, muted_sounds
 
 
-def test_show_queues_and_creates_draw_handle(addon):
+def test_show_queues_and_creates_draw_handles(addon):
     toast = addon.toast
     with muted_sounds(addon), force_prefs(addon, enable_toast=True, enable_sound=False):
         toast.remove_handler()  # guarantee a clean slate regardless of prior state
 
         toast.show("Live Test Achievement", "Shown via the live/MCP test layer", rare=False)
-        expect(toast._draw_handle is not None, "show() did not create a viewport draw handler")
+        expect(toast._draw_handles, "show() did not create any editor draw handler")
         expect(len(toast._pending) == 1, f"expected 1 queued toast, got {len(toast._pending)}")
 
         toast.remove_handler()
-        expect(toast._draw_handle is None, "remove_handler() did not clear the draw handle")
+        expect(not toast._draw_handles, "remove_handler() did not clear the draw handles")
         expect(not toast._pending and not toast._toasts, "remove_handler() did not clear the queues")
 
 
@@ -38,7 +38,7 @@ def test_disabled_preference_suppresses_show(addon):
     with muted_sounds(addon), force_prefs(addon, enable_toast=False):
         toast.remove_handler()
         toast.show("Should Not Appear", "enable_toast is forced off", rare=False)
-        expect(not toast._pending and toast._draw_handle is None,
+        expect(not toast._pending and not toast._draw_handles,
                "show() queued a toast / created a draw handler despite enable_toast=False")
 
 
@@ -72,7 +72,7 @@ def test_rare_flag_survives_the_queue(addon):
 def tests(addon, testing):
     return [
         ("show() queues a toast and creates a draw handler; remove_handler() clears both",
-         lambda: test_show_queues_and_creates_draw_handle(addon)),
+         lambda: test_show_queues_and_creates_draw_handles(addon)),
         ("enable_toast=False suppresses show() entirely",
          lambda: test_disabled_preference_suppresses_show(addon)),
         ("the animation tick promotes a pending toast to active",

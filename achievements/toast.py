@@ -268,7 +268,29 @@ XBOX_TEXT_PAD = 26.0    # правий відступ тексту в банер
 # ------------------------------------------------------------------ стан модуля
 _pending = []
 _toasts = []           # активні тости (Steam може мати кілька одночасно)
-_draw_handle = None
+_draw_handles = []     # (Space-клас, handle) для кожного редактора, де ми малюємо
+_last_redraw_area = None   # area, яку тегували минулого разу (див. _redraw_all)
+
+# Редактори, в яких картка може з'явитися. VIEW_3D перший і має пріоритет:
+# доки в якомусь вікні є 3D-в'юпорт, малюємо тільки там, і поведінка лишається
+# рівно такою, як була. Решта — запасні поверхні для воркспейсів, де 3D-в'юпорта
+# може не бути взагалі (Scripting, Compositing, Video Editing): раніше в них
+# ачивка розблоковувалась мовчки, тільки зі звуком.
+#
+# Список навмисно за іменами, а не за класами: набір Space-типів між версіями
+# Blender змінюється, а відсутній чи такий, що не приймає draw-хендлер, просто
+# пропускається замість того, щоб зламати реєстрацію решти.
+FALLBACK_SPACE_TYPES = (
+    ('VIEW_3D', "SpaceView3D"),
+    ('NODE_EDITOR', "SpaceNodeEditor"),
+    ('IMAGE_EDITOR', "SpaceImageEditor"),
+    ('SEQUENCE_EDITOR', "SpaceSequenceEditor"),
+    ('TEXT_EDITOR', "SpaceTextEditor"),
+    ('CLIP_EDITOR', "SpaceClipEditor"),
+    ('DOPESHEET_EDITOR', "SpaceDopeSheetEditor"),
+    ('GRAPH_EDITOR', "SpaceGraphEditor"),
+    ('SPREADSHEET', "SpaceSpreadsheet"),
+)
 _shader_uniform = None
 _shader_smooth = None
 _shader_conic = None
@@ -964,34 +986,60 @@ def _init_shaders():
 
 
 # =============================================================== малювання
-def _is_largest_view3d_region(region):
-    """True, якщо region — найбільший WINDOW-регіон 3D-в'юпорта серед усіх вікон."""
-    try:
-        ctx = getattr(bpy, "context", None)
-        wm = getattr(ctx, "window_manager", None)
-        if not wm or "Mock" in type(wm).__name__ or not hasattr(region, "as_pointer"):
-            return True
-        target = region.as_pointer()
-        best_ptr, best_area = None, -1
-        windows = getattr(wm, "windows", [])
-        for win in windows:
-            screen = getattr(win, "screen", None)
-            areas = getattr(screen, "areas", []) if screen else []
-            for area in areas:
-                if getattr(area, "type", None) != 'VIEW_3D':
+def _preferred_target():
+    """`(area, region_ptr)` — де саме зараз має жити картка, або `(None, None)`.
+
+    Правило в два кроки. Спершу серед усіх відкритих вікон шукаємо 3D-в'юпорти:
+    якщо хоч один є, картка йде в найбільший із них — рівно та поведінка, що
+    була раніше. Якщо 3D-в'юпорта немає в жодному вікні (Scripting, Compositing,
+    Video Editing цілком можуть бути без нього), беремо найбільший робочий
+    регіон серед інших підтримуваних редакторів — інакше ачивка відкривалася б
+    мовчки, з одним лише звуком.
+
+    Одна функція на два виклики навмисно: рішення «де малювати» і «кого просити
+    перемалюватись» мусять давати ту саму відповідь. Коли вони розходились —
+    хендлери стояли на дев'яти редакторах, а перемальовку замовляли тільки
+    3D-в'юпортам — картка поза в'юпортом висіла нерухомо, оживаючи лише від
+    випадкових перемальовок під курсором.
+    """
+    ctx = getattr(bpy, "context", None)
+    wm = getattr(ctx, "window_manager", None)
+    if not wm or "Mock" in type(wm).__name__:
+        return None, None
+
+    allowed = {t for t, _ in FALLBACK_SPACE_TYPES} if _fallback_enabled() else {'VIEW_3D'}
+
+    # (площа, area, вказівник) окремо для 3D-в'юпортів і для решти редакторів.
+    best = {True: (-1, None, None), False: (-1, None, None)}
+    for win in getattr(wm, "windows", []):
+        screen = getattr(win, "screen", None)
+        for area in (getattr(screen, "areas", []) if screen else []):
+            area_type = getattr(area, "type", None)
+            if area_type not in allowed:
+                continue
+            is_view3d = (area_type == 'VIEW_3D')
+            for r in (getattr(area, "regions", []) or []):
+                if getattr(r, "type", None) != 'WINDOW':
                     continue
-                regions = getattr(area, "regions", []) if area else []
-                for r in regions:
-                    if getattr(r, "type", None) == 'WINDOW':
-                        w = getattr(r, "width", 0)
-                        h = getattr(r, "height", 0)
-                        a = w * h
-                        if a > best_area:
-                            best_area = a
-                            best_ptr = r.as_pointer() if hasattr(r, "as_pointer") else None
+                size = getattr(r, "width", 0) * getattr(r, "height", 0)
+                if size > best[is_view3d][0]:
+                    ptr = r.as_pointer() if hasattr(r, "as_pointer") else None
+                    best[is_view3d] = (size, area, ptr)
+
+    chosen = best[True] if best[True][0] >= 0 else best[False]
+    return chosen[1], chosen[2]
+
+
+def _is_preferred_region(region):
+    """True, якщо саме в цьому регіоні сьогодні треба малювати картку."""
+    try:
+        if not hasattr(region, "as_pointer"):
+            return True
+        _area, best_ptr = _preferred_target()
+        target = region.as_pointer()
         return best_ptr is None or target is None or best_ptr == target
     except Exception as _dbg_err:
-        debug.log("toast.py:746", _dbg_err)
+        debug.log("toast.py:_is_preferred_region", _dbg_err)
         return True
 
 
@@ -1025,15 +1073,77 @@ def _draw_hgrad(pts, x0, w, c_left, c_right, alpha=1.0, mid=0.5):
     batch.draw(_shader_smooth)
 
 
+# --- позиція та розмір картки ---------------------------------------------
+# Якір 'STYLE' — це «як стиль малював завжди»: Steam і PlayStation у правому
+# нижньому куті, Xbox — по центру знизу. Він default саме тому, що не змінює
+# вигляд нікому, хто нічого не налаштовував.
+STYLE_ANCHORS = {'STEAM': 'BOTTOM_RIGHT', 'PS': 'BOTTOM_RIGHT', 'XBOX': 'BOTTOM_CENTER'}
+
+TOAST_SCALE_MIN = 0.5
+TOAST_SCALE_MAX = 2.0
+
+
+def _toast_scale():
+    """Користувацький множник розміру картки, затиснутий у розумні межі."""
+    prefs = get_preferences()
+    try:
+        value = float(getattr(prefs, "toast_scale", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    if value <= 0:
+        return 1.0
+    return max(TOAST_SCALE_MIN, min(TOAST_SCALE_MAX, value))
+
+
+def _anchor_for(style):
+    """Кут, до якого притискається картка цього стилю."""
+    prefs = get_preferences()
+    anchor = getattr(prefs, "toast_anchor", 'STYLE') if prefs is not None else 'STYLE'
+    if anchor in (None, '', 'STYLE'):
+        return STYLE_ANCHORS.get(style, 'BOTTOM_RIGHT')
+    return anchor
+
+
+def _anchor_dirs(anchor):
+    """(горизонтальний, вертикальний) напрямки в'їзду для цього якоря.
+
+    Картка має виїжджати з-за найближчого краю, а не завжди з правого і знизу:
+    притиснута до лівого краю, вона й приїздить зліва, притиснута до верху —
+    опускається згори.
+    """
+    return (-1.0 if anchor.endswith('LEFT') else 1.0,
+            -1.0 if anchor.startswith('TOP') else 1.0)
+
+
+def _anchor_xy(region, scale, shelf_h, w, h, anchor, pad=0.0):
+    """Ліва-нижня точка картки w×h у пікселях регіону."""
+    mr, mb = MARGIN_R * scale, MARGIN_B * scale + pad * scale
+    if anchor.endswith('LEFT'):
+        x = mr
+    elif anchor.endswith('CENTER'):
+        x = (region.width - w) / 2.0
+    else:
+        x = region.width - mr - w
+    # Вузький регіон (перетягнули межу) не має ховати картку за краєм.
+    x = max(mr, min(x, max(mr, region.width - mr - w)))
+
+    if anchor.startswith('TOP'):
+        y = max(shelf_h, region.height - mb - h)
+    else:
+        y = mb + shelf_h
+    return x, y
+
+
 def _viewport_geom():
     """(region, scale, shelf_h) або None, якщо малювати не тут."""
     region = bpy.context.region
     area = bpy.context.area
     if region is None or area is None:
         return None
-    if not _is_largest_view3d_region(region):
+    if not _is_preferred_region(region):
         return None
     scale = max(0.5, bpy.context.preferences.system.ui_scale)
+    scale *= _toast_scale()
     shelf_h = 0
     try:
         for r in (getattr(area, "regions", []) or []):
@@ -1120,7 +1230,9 @@ def _draw_card(t, now, region, scale, shelf_h, style):
     H = PANEL_H * (PS_H_FACTOR if is_ps else 1.0) * scale
     W = PANEL_W * scale
     R = (PANEL_R * scale) if _rounded(style) else 0.0
-    mr, mb = MARGIN_R * scale, MARGIN_B * scale
+
+    anchor = _anchor_for(style)
+    h_dir, v_dir = _anchor_dirs(anchor)
 
     # --- фаза: вхід / утримання / вихід
     dx = dy = 0.0
@@ -1128,20 +1240,22 @@ def _draw_card(t, now, region, scale, shelf_h, style):
     if e < T_IN:
         k = _EASE_IN(e / T_IN)
         if is_ps:
-            dx = (1.0 - k) * SLIDE_PX * scale          # справа наліво
+            dx = (1.0 - k) * SLIDE_PX * scale * h_dir   # з-за найближчого краю
         else:
-            dy = -(1.0 - k) * STEAM_RISE_PX * scale    # знизу вгору
+            dy = -(1.0 - k) * STEAM_RISE_PX * scale * v_dir
             alpha = k
     elif e >= T_IN + hold:
         k = min(1.0, (e - T_IN - hold) / T_OUT)
         alpha = max(0.0, 1.0 - k)
         if not is_ps:
-            dy = k * STEAM_RISE_PX * scale             # зникає вгору
+            dy = k * STEAM_RISE_PX * scale * v_dir      # іде туди ж, звідки прийшла
 
-    X = max(mr, region.width - mr - W) + dx
-    Y = mb + shelf_h + dy
+    ax, ay = _anchor_xy(region, scale, shelf_h, W, H, anchor)
+    X = ax + dx
+    Y = ay + dy
     if style == 'STEAM':
-        Y += _stack_offset(t, now, scale, H)
+        # Стек росте вглиб екрана від якоря: знизу — вгору, зверху — вниз.
+        Y += _stack_offset(t, now, scale, H) * v_dir
 
     rare = t['rare']
     pal_style = 'PS' if is_ps else 'STEAM'
@@ -1345,10 +1459,13 @@ def _draw_xbox(t, now, region, scale, shelf_h):
             alpha = 1.0
         cs = max(0.05, cs)
 
-    # --- геометрія: все по центру знизу
-    base_y = shelf_h + (MARGIN_B + 16) * scale
+    # --- геометрія: банер притискається до обраного якоря, коло їде від його центру
+    anchor = _anchor_for('XBOX')
+    # +16 px — власний відступ Xbox-стилю понад загальне поле, щоб при якорі
+    # 'STYLE' банер стояв рівно там, де стояв завжди.
+    base_x, base_y = _anchor_xy(region, scale, shelf_h, bw_full, cd, anchor, pad=16.0)
     cy = base_y + cr
-    center_x = region.width / 2.0
+    center_x = base_x + bw_full / 2.0
     cx = center_x - shift * k_open          # коло їде вліво
     bw = cd + (bw_full - cd) * k_open       # банер росте від діаметра кола
 
@@ -1547,10 +1664,41 @@ def _play_slot(slot):
 
 # =============================================================== таймер / черга
 def _redraw_all():
-    for win in bpy.context.window_manager.windows:
-        for area in win.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
+    """Просить перемалюватись той єдиний редактор, у якому висить картка.
+
+    Анімація живе на таймері 60 fps, а Blender перемальовує регіон лише на
+    запит — без цього виклику картка рухається тільки тоді, коли регіон
+    перемалює щось стороннє (наприклад курсор над ним).
+
+    Тегуємо рівно одну area: малює картку один регіон, і будити решту — це
+    дарма віддані кадри в редакторах, де нічого не змінилося.
+    """
+    global _last_redraw_area
+    try:
+        area, _ptr = _preferred_target()
+        if area is not None:
+            # Ціль могла щойно змінитися (перетягнули межу, і найбільшим став
+            # інший редактор). Старий тоді лишився б із намальованою карткою в
+            # останньому кадрі, доки його не перемалює щось стороннє — тож
+            # будимо і його, один раз, щоб прибрати за собою.
+            if _last_redraw_area is not None and _last_redraw_area != area:
+                try:
+                    _last_redraw_area.tag_redraw()
+                except (ReferenceError, AttributeError, RuntimeError):
+                    pass          # area зникла разом зі своїм screen
+            _last_redraw_area = area
+            area.tag_redraw()
+            return
+        _last_redraw_area = None
+        # Цілі немає (вікон ще нема, або всі редактори — неприйнятних типів):
+        # будимо 3D-в'юпорти, щоб картка не зависла, якщо один з'явиться.
+        for win in bpy.context.window_manager.windows:
+            for area in win.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except Exception as _dbg_err:  # noqa: BLE001
+        # Виняток тут зняв би таймер анімації разом із собою.
+        debug.log("toast.py:_redraw_all", _dbg_err)
 
 
 def _total_time(style, hold):
@@ -1645,11 +1793,31 @@ def get_preferences():
     return None
 
 
+def _fallback_enabled():
+    """Чи дозволено малювати поза 3D-в'юпортом."""
+    prefs = get_preferences()
+    return bool(getattr(prefs, "toast_in_any_editor", True)) if prefs is not None else True
+
+
 def ensure_handler():
-    global _draw_handle
-    if _draw_handle is None:
-        _draw_handle = bpy.types.SpaceView3D.draw_handler_add(
-            _draw, (), 'WINDOW', 'POST_PIXEL')
+    """Вішає draw-колбек на кожен підтримуваний редактор.
+
+    Колбек один і той самий: він сам вирішує, чи цей регіон — той, у якому
+    сьогодні треба малювати (див. _is_preferred_region), тож зайві реєстрації
+    коштують рівно одного раннього return на перемальовку.
+    """
+    if _draw_handles:
+        return
+    wanted = FALLBACK_SPACE_TYPES if _fallback_enabled() else FALLBACK_SPACE_TYPES[:1]
+    for _area_type, space_name in wanted:
+        space = getattr(bpy.types, space_name, None)
+        adder = getattr(space, "draw_handler_add", None)
+        if adder is None:
+            continue
+        try:
+            _draw_handles.append((space, adder(_draw, (), 'WINDOW', 'POST_PIXEL')))
+        except (TypeError, ValueError, RuntimeError, AttributeError) as _dbg_err:
+            debug.log("toast.py:ensure_handler/%s" % space_name, _dbg_err)
 
 
 def _unload_fonts():
@@ -1714,20 +1882,23 @@ def invalidate_fonts():
 
 
 def remove_handler():
-    global _draw_handle, _pending, _shader_uniform, _shader_smooth
+    global _pending, _shader_uniform, _shader_smooth
     global _shader_conic, _shader_radial, _shader_image_tint, _mask_tex, _mask_failed
-    global _shader_icon_burn, _asset_tex, _last_spawn
+    global _shader_icon_burn, _asset_tex, _last_spawn, _last_redraw_area
     _pending.clear()
     _toasts.clear()
     _asset_tex = {}
     _last_spawn = 0.0
+    # Не тримаємо посилання на area через вимкнення аддона: наступного разу
+    # це вже може бути інший screen.
+    _last_redraw_area = None
     _unload_fonts()
-    if _draw_handle is not None:
+    while _draw_handles:
+        space, handle = _draw_handles.pop()
         try:
-            bpy.types.SpaceView3D.draw_handler_remove(_draw_handle, 'WINDOW')
-        except (ValueError, RuntimeError):
+            space.draw_handler_remove(handle, 'WINDOW')
+        except (ValueError, RuntimeError, AttributeError):
             pass
-        _draw_handle = None
     if hasattr(bpy.app.timers, "is_registered"):
         if bpy.app.timers.is_registered(_tick):
             bpy.app.timers.unregister(_tick)

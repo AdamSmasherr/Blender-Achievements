@@ -46,7 +46,7 @@ def _timer_state():
 def test_single_register_unregister_leaves_no_trace():
     before_handlers = _handler_counts()
     before_timers = _timer_state()
-    before_draw = addon.toast._draw_handle
+    before_draw = list(addon.toast._draw_handles)
 
     addon.register()
     addon.unregister()
@@ -55,7 +55,7 @@ def test_single_register_unregister_leaves_no_trace():
            f"handler counts changed: before={before_handlers} after={_handler_counts()}")
     expect(_timer_state() == before_timers,
            f"timers left registered: {_timer_state()}")
-    expect(addon.toast._draw_handle == before_draw, "draw handle not cleared after unregister")
+    expect(addon.toast._draw_handles == before_draw, "draw handles not cleared after unregister")
 
 
 def test_repeated_cycles_do_not_accumulate_handlers():
