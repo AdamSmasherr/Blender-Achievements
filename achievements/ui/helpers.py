@@ -30,6 +30,37 @@ def get_preferences(context=None):
     return None
 
 
+def layout_metrics(context=None):
+    """`(ширина регіону в пікселях | None, ui_scale)` — для розрахунку переносу тексту.
+
+    ui_scale беремо з `system`, а не з `view`: `view.ui_scale` — це множник,
+    який виставив користувач, тоді як `system.ui_scale` враховує ще й DPI
+    монітора, і саме в цих підсумкових пікселях міряється ширина регіону.
+
+    Ширина повертається None, коли її нема або вона вироджена: у згорнутої
+    N-панелі регіон має ширину 1 px, і рахувати з неї — гарантовано отримати
+    сміття замість переносу.
+    """
+    if context is None:
+        context = bpy.context
+
+    width = None
+    scale = 1.0
+    try:
+        raw_width = getattr(getattr(context, "region", None), "width", None)
+        if isinstance(raw_width, (int, float)) and raw_width > 1:
+            width = float(raw_width)
+
+        system = getattr(getattr(context, "preferences", None), "system", None)
+        raw_scale = getattr(system, "ui_scale", None)
+        if isinstance(raw_scale, (int, float)) and raw_scale > 0:
+            scale = float(raw_scale)
+    except Exception as _dbg_err:  # noqa: BLE001
+        debug.log("ui/helpers.py:layout_metrics", _dbg_err)
+
+    return width, scale
+
+
 def _tag_redraw_all():
     """Перемальовує панелі, що показують прогрес (сайдбар N + Preferences)."""
     try:

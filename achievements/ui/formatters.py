@@ -51,6 +51,44 @@ def format_duration(seconds) -> str:
     return f"{minutes} min" if minutes else "< 1 min"
 
 
+def format_progress_value(value) -> str:
+    """`940` / `12,345` / `12.3M` / `1B`.
+
+    Підпис живе *всередині* прогрес-бару, а бар у N-панелі вузький, тож
+    «1000000000» туди не влізе. До мільйона число лишається точним (з
+    роздільниками), далі стискається до M/B — на такому масштабі різниця між
+    12.3M і 12,345,678 для ока однакова, а місця економиться втричі.
+    """
+    try:
+        number = int(value)
+    except Exception:
+        return "0"
+    if number < 0:
+        number = 0
+    if number < 1_000_000:
+        return f"{number:,}"
+
+    # Три значущі цифри: 1.2M, 12.3M, 948M, 1B. Десятковий знак після сотень —
+    # це шум: різниця між 948.3M і 948M на прогрес-барі до мільярда невидима.
+    #
+    # Одиниця вибирається за вже заокругленим значенням, інакше 999,999,999
+    # дало б "1000M" замість "1B".
+    for divisor, suffix in ((1_000_000_000, "B"), (1_000_000, "M")):
+        scaled = number / divisor
+        if scaled < 0.9995:
+            continue
+        text = f"{scaled:.0f}" if scaled >= 99.95 else f"{scaled:.1f}"
+        if text.endswith(".0"):
+            text = text[:-2]
+        return text + suffix
+    return f"{number:,}"
+
+
+def format_progress(current, target) -> str:
+    """`12.3M / 1B` — підпис прогрес-бару заблокованої ачивки."""
+    return f"{format_progress_value(current)} / {format_progress_value(target)}"
+
+
 def calendar_level(seconds) -> int:
     """Індекс рівня інтенсивності (0..4) для відпрацьованих секунд."""
     try:
@@ -109,48 +147,82 @@ def format_unlock_date(timestamp_str: str) -> str:
         return ""
 
 
-def _split_description(text: str, max_line_chars: int = 40) -> list[str]:
-    """Splits description into 1 or 2 lines dynamically. Truncates with '...' only if text overflows 2 lines."""
+# --- Description wrapping -------------------------------------------------
+
+# Середня ширина символу опису в пікселях при ui_scale = 1. Заміряно
+# blf.dimensions() віджетним шрифтом (11 pt) на справжньому реченні з опису
+# ачивки: 8.0 px при ui_scale 1.5, тобто 5.33 на одиницю масштабу. Округлено
+# вгору навмисно — недооцінка ширини символу дає переповнення, а переповнений
+# лейбл Blender обрізає мовчки, без жодного «...»; переоцінка ж коштує щонайбільше
+# зайвого переносу.
+DESCRIPTION_CHAR_PX = 5.6
+
+# Скільки рядків максимум віддаємо опису. Найдовший опис у реєстрі — 80
+# символів, тож у вузькому сайдбарі (≈28 символів у рядок) йому треба три
+# рядки; четвертий — запас на випадок ще вужчої панелі.
+DESCRIPTION_MAX_LINES = 4
+
+# Нижче — панель настільки вузька, що читати там нічого; вище — ширша за
+# найдовший опис, тож рахувати далі немає сенсу.
+DESCRIPTION_MIN_CHARS = 14
+DESCRIPTION_MAX_CHARS = 120
+
+
+def description_line_chars(region_width, ui_scale: float = 1.0,
+                           text_fraction: float = 1.0,
+                           padding: float = 30.0) -> int:
+    """Скільки символів опису влазить у рядок списку завширшки `region_width`.
+
+    `text_fraction` — частка ширини, що лишається тексту після колонки з
+    іконкою (тобто `1 - factor`, з яким кличеться layout.split). `padding` —
+    сумарні відступи вкладених боксів і полів регіону, у пікселях при
+    ui_scale = 1; масштабуються разом зі шрифтом.
+
+    Аргументи приходять із bpy, який під час перетягування межі регіону встигає
+    віддати і сміття, і одиничну ширину згорнутої панелі, тож усе, що не схоже
+    на число, зводиться до мінімуму, а не валить малювання.
+    """
+    try:
+        width = float(region_width)
+        scale = float(ui_scale)
+    except (TypeError, ValueError):
+        return DESCRIPTION_MIN_CHARS
+    if scale <= 0:
+        scale = 1.0
+    usable = (width - padding * scale) * max(0.05, min(1.0, text_fraction))
+    chars = int(usable // (DESCRIPTION_CHAR_PX * scale))
+    return max(DESCRIPTION_MIN_CHARS, min(DESCRIPTION_MAX_CHARS, chars))
+
+
+def _split_description(text: str, max_line_chars: int = 40,
+                       max_lines: int = 2) -> list[str]:
+    """Переносить опис по словах на щонайбільше `max_lines` рядків.
+
+    Хвіст, що не влазить, обрізається з «...». Слово, довше за ліміт рядка,
+    забирає рядок собі цілком — інакше цикл не зрушив би з місця.
+    """
     if not text:
         return []
 
-    # 1. If text fits completely on 1 line: return ONLY 1 line
+    # Влазить в один рядок — жодного розбору не потрібно.
     if len(text) <= max_line_chars:
         return [text]
 
     words = text.split()
-    line1_words = []
-    len1 = 0
-    idx = 0
-    for i, w in enumerate(words):
-        space = 1 if line1_words else 0
-        if len1 + space + len(w) <= max_line_chars:
-            line1_words.append(w)
-            len1 += space + len(w)
-            idx = i + 1
-        else:
-            break
+    lines = []
+    while words and len(lines) < max_lines:
+        line_words = []
+        length = 0
+        while words:
+            word = words[0]
+            space = 1 if line_words else 0
+            if line_words and length + space + len(word) > max_line_chars:
+                break
+            line_words.append(words.pop(0))
+            length += space + len(word)
+        lines.append(" ".join(line_words))
 
-    line1 = " ".join(line1_words)
-    remaining_words = words[idx:]
-    if not remaining_words:
-        return [line1]
+    if words and lines:
+        lines[-1] = lines[-1].rstrip(". ") + "..."
 
-    line2_words = []
-    len2 = 0
-    idx2 = 0
-    for i, w in enumerate(remaining_words):
-        space = 1 if line2_words else 0
-        if len2 + space + len(w) <= max_line_chars:
-            line2_words.append(w)
-            len2 += space + len(w)
-            idx2 = i + 1
-        else:
-            break
-
-    line2 = " ".join(line2_words)
-    leftover = remaining_words[idx2:]
-    if leftover:
-        line2 = line2.rstrip(". ") + "..."
-
-    return [line1, line2]
+    return lines

@@ -19,11 +19,15 @@ from .formatters import (
     CALENDAR_LEVEL_SHORT,
     CALENDAR_THRESHOLDS,
     CALENDAR_WEEKS,
+    DESCRIPTION_MAX_LINES,
     _split_description,
     calendar_days,
     calendar_level,
+    description_line_chars,
     format_day_label,
     format_duration,
+    format_progress,
+    format_progress_value,
     format_unlock_date,
 )
 from .helpers import _tag_redraw_all, get_preferences
