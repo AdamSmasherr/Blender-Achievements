@@ -6,6 +6,8 @@ A native Blender addon that gamifies your workflow with achievements. 79 achieve
 
 - **79 achievements**  - session-scoped (things you do
 *this* session) and global/cumulative (persisted totals across all time).
+Locked ones carry a live progress bar with readable numbers - `948M / 1B`,
+not `948300000 / 1000000000`.
 - **Activity calendar**: a GitHub-style contribution heatmap of the last 13
 weeks, showing how much time you spent with Blender open each day. Lives in
 the N-panel sidebar (above the achievements list) and in the addon
@@ -37,7 +39,7 @@ per-slot and master volume control. Export/import profiles as JSON to move
 them between machines. Every colour in the pop-up card (background, title,
 description, the rare-achievement glow) is a colour picker in the
 preferences — pick your own palette or hit **Reset** to go back to the
-defaults.
+defaults. The card's size and which corner it sticks to are settings too.
 - **Icon colours**: recolour the achievement artwork itself — the tile
 behind an icon and the icon's own colour — and it updates everywhere: the
 pop-up card and the achievements list (sidebar and preferences) all draw
@@ -48,7 +50,9 @@ Every level of the activity calendar's heatmap is likewise a colour picker
 of its own.
 - **N-panel toggles**: show or hide the achievements list and the activity
 calendar independently in the sidebar, if you only want one of them (or
-neither, and just check progress from the preferences window).
+neither, and just check progress from the preferences window). A **compact**
+mode puts each achievement on one line - small icon, name, progress bar - so
+the whole list fits a narrow sidebar.
 - Runs entirely off Blender’s own Python API — no external dependencies,
 no network access, no telemetry.
 
@@ -62,7 +66,10 @@ depsgraph/render/save handlers, and runs one invisible modal operator that
 observes key presses without ever consuming them.
 - **Draws pop-up notifications** in the 3D Viewport when an achievement
 unlocks, and **plays a short sound** through Blender’s own audio system.
-Both can be turned off in the add-on preferences.
+Both can be turned off in the add-on preferences. If no 3D Viewport is open
+anywhere — Scripting, Compositing and Video Editing workspaces can be
+without one — the pop-up appears in the largest other editor instead of
+being silently skipped.
 - **Writes one file to your Blender configuration folder**:
 `blender_achievements.json` (next to it, a short-lived `.lock` file while
 saving). It holds unlocked achievements plus cumulative counters —
@@ -95,6 +102,9 @@ python build.py
 ```
 
 ## Configuring sounds, animation & colours
+
+The add-on preferences are six collapsible sections; **Settings** and
+**Colours** start open, the rest are one click away.
 
 Addon preferences → **Profiles**: pick Steam / Xbox / PlayStation for the
 built-in look, or switch to **Custom** to build your own profile (any
