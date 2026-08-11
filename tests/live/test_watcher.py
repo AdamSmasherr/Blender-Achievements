@@ -14,7 +14,10 @@ own normal operation — not a blank slate. That constrains the design:
     watcher_is_stale/needs_launch) is tested by saving the real flags,
     forcing them into a known state, checking the guard, then restoring the
     saved values exactly — it never touches whatever real modal copy might
-    actually be alive.
+    actually be alive. The flags themselves live on the SessionState
+    singleton (`state.watcher_instance_active` / `.watcher_heartbeat`), not
+    as module globals; the functions around them are re-exported by the
+    achievements.achievements facade.
   - The one thing that genuinely needs a live invoke() (proving it succeeds
     against a real window at all) only runs if no instance is already
     active: starting a *second* real modal copy on top of a live one would
@@ -31,16 +34,16 @@ from common import expect
 
 def test_watcher_instance_guard_refuses_concurrent_start(addon):
     ach = addon.achievements
-    saved_active, saved_heartbeat = ach._watcher_instance_active, ach._watcher_heartbeat
+    saved_active, saved_heartbeat = ach.state.watcher_instance_active, ach.state.watcher_heartbeat
     try:
-        ach._watcher_instance_active = False
+        ach.state.watcher_instance_active = False
         first = ach.watcher_instance_start()
         second = ach.watcher_instance_start()
         expect(first is True, "first watcher_instance_start() call should succeed from a clear flag")
         expect(second is False, "a concurrent second watcher_instance_start() was not refused")
     finally:
-        ach._watcher_instance_active = saved_active
-        ach._watcher_heartbeat = saved_heartbeat
+        ach.state.watcher_instance_active = saved_active
+        ach.state.watcher_heartbeat = saved_heartbeat
 
 
 def test_stale_instance_flag_allows_a_fresh_start(addon):
@@ -48,23 +51,23 @@ def test_stale_instance_flag_allows_a_fresh_start(addon):
     closed) must not permanently block every future start — watcher_is_stale()
     is the heartbeat timeout that recovers from that."""
     ach = addon.achievements
-    saved_active, saved_heartbeat = ach._watcher_instance_active, ach._watcher_heartbeat
+    saved_active, saved_heartbeat = ach.state.watcher_instance_active, ach.state.watcher_heartbeat
     try:
-        ach._watcher_instance_active = True
-        ach._watcher_heartbeat = time.time() - 999  # long past _WATCHER_STALE_AFTER
+        ach.state.watcher_instance_active = True
+        ach.state.watcher_heartbeat = time.time() - 999  # long past _WATCHER_STALE_AFTER
         expect(ach.watcher_is_stale(), "a 999s-old heartbeat was not recognized as stale")
         expect(ach.watcher_instance_start() is True,
                "a stale instance flag blocked a fresh start instead of being recovered from")
     finally:
-        ach._watcher_instance_active = saved_active
-        ach._watcher_heartbeat = saved_heartbeat
+        ach.state.watcher_instance_active = saved_active
+        ach.state.watcher_heartbeat = saved_heartbeat
 
 
 def test_invoke_starts_a_real_modal_copy_when_none_is_active(addon):
     """The actual thing this test file exists for: proving invoke() can
     succeed at all against a real window, which --background doesn't have."""
     ach = addon.achievements
-    if ach._watcher_instance_active and not ach.watcher_is_stale():
+    if ach.state.watcher_instance_active and not ach.watcher_is_stale():
         print("    (skipped the live invoke() — a modal watcher is already running in this "
               "session; starting a second one on top of it is the exact bug being guarded "
               "against, not something to test by causing it)")
@@ -79,7 +82,7 @@ def test_invoke_starts_a_real_modal_copy_when_none_is_active(addon):
         with bpy.context.temp_override(window=wm.windows[0]):
             result = bpy.ops.achievement.watcher('INVOKE_DEFAULT')
         expect(result == {'RUNNING_MODAL'}, f"invoke() did not enter RUNNING_MODAL: {result}")
-        expect(ach._watcher_instance_active, "instance flag not set after a successful invoke()")
+        expect(ach.state.watcher_instance_active, "instance flag not set after a successful invoke()")
         expect(ach.watcher_instance_start() is False,
                "a second concurrent instance was allowed to start against the live one just created")
     finally:
