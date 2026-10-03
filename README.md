@@ -6,8 +6,16 @@ A native Blender addon that gamifies your workflow with achievements. 79 achieve
 
 - **79 achievements**  - session-scoped (things you do
 *this* session) and global/cumulative (persisted totals across all time).
-Locked ones carry a live progress bar with readable numbers - `948M / 1B`,
-not `948300000 / 1000000000`.
+Locked ones carry a live progress bar with readable numbers - `948M / 1B`
+for large counts and `5 h / 10 h` for accumulated time.
+- **Find your next achievement**: search by name or condition, combine
+All / Unlocked / Locked with a category, and clear all filters with one click.
+The sidebar and Preferences share the same browsing controls. Overall progress
+always shows your entire collection, even when the list is filtered.
+- **Achievement details**: click a name for the complete condition, category,
+rarity, tracking explanation and progress or unlock date. Tooltips show the full
+condition too, including in compact mode. Details explain session totals,
+progress saved across sessions, continuous conditions and extra unlock requirements.
 - **Activity calendar**: a GitHub-style contribution heatmap of the last 13
 weeks, showing how much time you spent with Blender open each day. Lives in
 the N-panel sidebar (above the achievements list) and in the addon
@@ -103,13 +111,16 @@ python build.py
 
 ## Configuring sounds, animation & colours
 
-The add-on preferences are six collapsible sections; **Settings** and
-**Colours** start open, the rest are one click away.
+The **Notifications** block at the top brings style, sound, master volume,
+**Preview** and **Preview Rare** together. Detailed controls are in six
+collapsible sections below: **Display & Sidebar**, **Colours**, **Sound Files &
+Profiles**, **Progress Data**, **Activity Calendar** and **Achievements**.
 
-Addon preferences → **Profiles**: pick Steam / Xbox / PlayStation for the
-built-in look, or switch to **Custom** to build your own profile (any
-animation style + your own sound files per slot). Use **Export Profiles** /
-**Import Profiles** to carry your custom profiles to another machine.
+Addon preferences → **Notifications**: pick Steam / Xbox / PlayStation for the
+built-in animation and sounds, or switch to **Custom**. Under **Sound Files &
+Profiles**, create or select a profile and choose sound files per slot. Its
+animation is selected in **Notifications**. Use **Export** / **Import** in the
+profile section to carry your custom profiles to another machine.
 
 Addon preferences → **Colours**: the pop-up card's palette follows whichever
 style is active above (change the style there, and the colour fields update
@@ -164,7 +175,7 @@ Reset.
 
 | Achievement | Description |
 | --- | --- |
-| **Node Spaghetti** ⭐ | Connect over 50 nodes in Shader or Geometry Nodes. |
+| **Node Spaghetti** ⭐ | Connect 50 or more nodes in Shader or Geometry Nodes. |
 | **Pure Procedural** | Create a material without using any external image textures. |
 | **Geometry Nodes Guru** ⭐ | Create a node tree with 5+ nested Node Groups. |
 | **Material Hoarder** | Accumulate 30 or more materials in a single project file. |
@@ -206,7 +217,7 @@ Reset.
 | **Time Traveler** | Undo actions 30+ times in a row within one minute. |
 | **Back from the dead** ⭐ | Successfully restore a project via Recover Auto Save after a crash. |
 | **Living on the Edge** | Work on a complex scene for over 2 hours without saving (Ctrl+S). |
-| **Add-on Collector** | Enable over 25 add-ons in the preferences. |
+| **Add-on Collector** | Enable 25 or more add-ons in the preferences. |
 | **Shortcut Ninja** ⭐ | Use 15 different keyboard shortcuts within one minute. |
 | **Know your Place** | Apply scale, rotation, and location (Ctrl+A) on 20+ objects in a scene. |
 | **Outliner Chaos** | Maintain 47+ auto-named objects (Cube.001, Cube.002) without renaming. |
@@ -246,7 +257,7 @@ Reset.
 | **Loyalty I** | Launch Blender 100 times. |
 | **Loyalty II** | Launch Blender 500 times. |
 | **Loyalty III** ⭐ | Launch Blender 1,000 times. |
-| **The Long Haul** ⭐ | Keep a single render running for over 24 hours. |
+| **The Long Haul** ⭐ | Finish a single render lasting at least 24 hours. |
 | **Live to Die Another Day** | Recover from a crash 10 times in total. |
 | **Consistency** | Open Blender 7 days in a row. |
 | **Dedicated** ⭐ | Open Blender 30 days in a row. |

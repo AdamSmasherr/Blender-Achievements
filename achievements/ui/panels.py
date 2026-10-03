@@ -4,12 +4,15 @@ sidebar and at the bottom of AddonPreferences) and the two Panel classes
 that host it plus the activity calendar in the 3D-View sidebar.
 """
 
+import textwrap
+
 import bpy
 
 from .. import registry
 from ..rules import get_achievement_progress
 from .. import engine
 from .calendar import draw_activity_calendar
+from .catalog import filter_achievements, get_browser
 from .formatters import (DESCRIPTION_MAX_LINES, _split_description,
                          description_line_chars, format_progress,
                          format_unlock_date)
@@ -47,7 +50,11 @@ def _description_chars(context, split_factor, is_sidebar):
     text_fraction = (1.0 - split_factor)
     if not is_sidebar:
         text_fraction *= PREFS_WIDTH_FRACTION
-    return description_line_chars(width, ui_scale, text_fraction)
+    # The sidebar includes tabs, its scrollbar and two nested box margins.
+    # Reserve that space before wrapping, so Blender does not truncate a line
+    # that our character estimate thought would fit.
+    return description_line_chars(width, ui_scale, text_fraction,
+                                  padding=60.0 if is_sidebar else 30.0)
 
 
 def _draw_icon(container, ach_id, ach_def, pcoll, icon_scale, locked):
@@ -62,7 +69,23 @@ def _draw_icon(container, ach_id, ach_def, pcoll, icon_scale, locked):
     container.label(text="", icon=fallback)
 
 
-def _draw_progress(container, prog):
+def _draw_title(container, ach_id, title):
+    """Render a stable left edge and keep details one click away.
+
+    An ``emboss=False`` operator is still a button in Blender's layout engine:
+    its text is centered in the available cell, so short achievement names
+    appeared at different x positions. A label owns the text alignment; the
+    adjacent info button owns the popup action.
+    """
+    row = container.row(align=True)
+    row.alignment = 'LEFT'
+    row.label(text=title)
+    button = row.operator("achievement.details", text="", icon='INFO',
+                          emboss=False)
+    button.achievement_id = ach_id
+
+
+def _draw_progress(container, prog, unit="COUNT"):
     """Прогрес-бар заблокованої ачивки.
 
     `progress()` є на UILayout ще з Blender 4.0, а аддон вимагає 4.4+, тож
@@ -70,7 +93,7 @@ def _draw_progress(container, prog):
     заглушки, у які малюють тести.
     """
     curr, target = prog
-    label = format_progress(curr, target)
+    label = format_progress(curr, target, unit)
     if hasattr(container, "progress"):
         container.progress(factor=min(1.0, max(0.0, curr / target)),
                            text=label, type='BAR')
@@ -99,13 +122,10 @@ def _draw_full_item(box, ach_id, ach_def, pcoll, icon_scale, split_factor,
 
     main_col = split.column(align=True)
 
-    # Назва, а для розблокованої — ще й дата, праворуч на тій самій висоті.
-    title_row = main_col.row(align=True)
-    title_row.label(text=ach_def.title)
+    # Give the clickable title its own line; a timestamp crowds it in a sidebar.
+    _draw_title(main_col, ach_id, ach_def.title)
     if not locked:
-        date_row = title_row.row(align=True)
-        if hasattr(date_row, "alignment"):
-            date_row.alignment = 'RIGHT'
+        date_row = main_col.row(align=True)
         date_row.label(text=format_unlock_date(unlocked_at))
 
     for line in _split_description(ach_def.description,
@@ -116,7 +136,7 @@ def _draw_full_item(box, ach_id, ach_def, pcoll, icon_scale, split_factor,
     # Бар — останнім рядком, на всю ширину під описом. Число всередині нього,
     # тому в рядку назви його вже немає.
     if prog is not None:
-        _draw_progress(main_col.row(align=True), prog)
+        _draw_progress(main_col.row(align=True), prog, ach_def.progress_unit)
 
 
 def _draw_compact_item(container, ach_id, ach_def, pcoll, title_chars,
@@ -126,26 +146,34 @@ def _draw_compact_item(container, ach_id, ach_def, pcoll, title_chars,
     Без вкладеного box'а: саме його поля й робили зі списку рулон.
     """
     locked = unlocked_at is None
+    # Keep three explicit slots.  A row with no progress bar must reserve the
+    # same right-hand space as a row with one; otherwise Blender's auto-width
+    # layout reallocates the empty column and moves the title to the right.
     row = container.row(align=True)
+    if hasattr(row, "split"):
+        outer = row.split(factor=COMPACT_ICON_FACTOR, align=True)
+        icon_col = outer.column(align=True)
+        content = outer.column(align=True)
+        content_split = content.split(factor=COMPACT_TITLE_FACTOR, align=True)
+        title_col = content_split.column(align=True)
+        right = content_split.column(align=True)
+    else:
+        icon_col = row.row(align=True)
+        title_col = row.row(align=True)
+        right = row.row(align=True)
 
-    icon_holder = row.row(align=True)
+    icon_holder = icon_col.row(align=True)
     if locked and hasattr(icon_holder, "active"):
         icon_holder.active = False
     _draw_icon(icon_holder, ach_id, ach_def, pcoll, COMPACT_ICON_SCALE, locked)
 
-    if hasattr(row, "split"):
-        body = row.split(factor=COMPACT_TITLE_FACTOR, align=True)
-    else:
-        body = row.row(align=True)
-
     # Назва в один рядок: тут вона єдине, що описує ачивку, тож обрізати її
     # своїм «...» краще, ніж дати Blender'у мовчки зрізати хвіст.
     title = _split_description(ach_def.title, max_line_chars=title_chars, max_lines=1)
-    body.label(text=title[0] if title else ach_def.title)
+    _draw_title(title_col, ach_id, title[0] if title else ach_def.title)
 
-    right = body.row(align=True)
     if prog is not None:
-        _draw_progress(right, prog)
+        _draw_progress(right, prog, ach_def.progress_unit)
     elif not locked:
         if hasattr(right, "alignment"):
             right.alignment = 'RIGHT'
@@ -153,6 +181,8 @@ def _draw_compact_item(container, ach_id, ach_def, pcoll, title_chars,
 
 
 def draw_achievements_list(layout, context=None, icon_scale=3.4375, is_sidebar=False):
+    if context is None:
+        context = bpy.context
     eng = engine.get_engine()
     stats = eng.get_stats()
     pcoll = get_custom_icons()
@@ -175,11 +205,42 @@ def draw_achievements_list(layout, context=None, icon_scale=3.4375, is_sidebar=F
     top_box = layout.box()
     top_box.label(text=f"Progress: {stats['unlocked']}/{stats['total']} ({stats['percentage']}%)", icon='SOLO_ON')
 
+    browser = get_browser(context)
+    definitions = list(registry.ACHIEVEMENTS.values())
+    if browser is not None:
+        controls = layout.column(align=True)
+        search = controls.row(align=True)
+        search.prop(browser, "query", text="", icon='VIEWZOOM')
+        clear = search.row(align=True)
+        clear.enabled = bool(browser.query.strip() or browser.status != 'ALL'
+                             or browser.category != 'ALL')
+        clear.operator("achievement.clear_filters", text="", icon='LOOP_BACK')
+        controls.row(align=True).prop(browser, "status", expand=True)
+        controls.prop(browser, "category", text="")
+        if is_sidebar and prefs is not None:
+            controls.prop(prefs, "compact_sidebar", text="Compact list")
+        definitions = filter_achievements(
+            definitions, set(eng.get_unlocked_ids()), browser.query,
+            browser.status, browser.category)
+        if len(definitions) != stats['total']:
+            layout.label(text=f"Showing {len(definitions)} of {stats['total']}")
+
+    if not definitions:
+        empty = layout.column(align=True)
+        empty.label(text="No matching achievements", icon='INFO')
+        empty.operator("achievement.clear_filters", text="Show All Achievements")
+        return
+
+    hint = layout.row()
+    hint.enabled = False
+    hint.label(text="Click a name for details", icon='INFO')
+
     # Split achievements into unlocked and locked
     unlocked_list = []
     locked_list = []
 
-    for ach_id, ach_def in registry.ACHIEVEMENTS.items():
+    for ach_def in definitions:
+        ach_id = ach_def.id
         if eng.is_unlocked(ach_id):
             unlocked_list.append((ach_id, ach_def, eng.get_unlocked_at(ach_id)))
         else:
@@ -216,6 +277,42 @@ def draw_achievements_list(layout, context=None, icon_scale=3.4375, is_sidebar=F
             else:
                 _draw_full_item(locked_box, ach_id, ach_def, pcoll, icon_scale,
                                 split_factor, max_chars, prog=prog)
+
+
+def draw_achievement_details(layout, ach_def):
+    """Read-only popup content; long conditions are wrapped without truncation."""
+    def paragraph(text):
+        col = layout.column(align=True)
+        for line in textwrap.wrap(text, width=52):
+            col.label(text=line)
+
+    eng = engine.get_engine()
+    header = layout.row()
+    _draw_icon(header, ach_def.id, ach_def, get_custom_icons(), 2.0,
+               not eng.is_unlocked(ach_def.id))
+    title = header.column(align=True)
+    for line in textwrap.wrap(ach_def.title, width=38):
+        title.label(text=line)
+    title.label(text=ach_def.category)
+    if ach_def.rare:
+        title.label(text="Rare achievement", icon='SOLO_ON')
+
+    layout.separator()
+    paragraph(ach_def.description)
+    layout.separator()
+    layout.label(text="How it counts", icon='INFO')
+    paragraph(ach_def.tracking_hint)
+    layout.separator()
+    if eng.is_unlocked(ach_def.id):
+        layout.label(text="Unlocked", icon='CHECKMARK')
+        layout.label(text=format_unlock_date(eng.get_unlocked_at(ach_def.id)))
+    else:
+        layout.label(text="Locked", icon='LOCKED')
+        prog = get_achievement_progress(ach_def.id)
+        if prog is not None:
+            _draw_progress(layout.row(), prog, ach_def.progress_unit)
+            if ach_def.check is not None:
+                paragraph("The bar shows the amount reached so far. Complete the condition above as well to unlock.")
 
 
 class ACHIEVEMENT_PT_panel(bpy.types.Panel):

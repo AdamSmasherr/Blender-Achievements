@@ -43,6 +43,14 @@ def test_format_progress_pairs_current_and_target():
     assert addon.format_progress(12_345_678, 1_000_000_000) == "12.3M / 1B"
 
 
+def test_time_progress_is_readable_without_rounding_up_to_the_goal():
+    assert addon.format_progress(18_000, 36_000, 'SECONDS') == "5 h / 10 h"
+    assert addon.format_progress(3_660, 72_000, 'SECONDS') == "1 h 1 min / 20 h"
+    assert addon.format_progress(0, 36_000, 'SECONDS') == "0 min / 10 h"
+    assert addon.format_progress(30, 36_000, 'SECONDS') == "< 1 min / 10 h"
+    assert addon.format_progress(35_999, 36_000, 'SECONDS') == "9 h 59 min / 10 h"
+
+
 def test_description_line_chars_follows_width_and_scale():
     # Same panel, twice the UI scale -> half the characters.
     at_1x = addon.description_line_chars(600, ui_scale=1.0)

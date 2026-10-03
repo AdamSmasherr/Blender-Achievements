@@ -52,6 +52,7 @@ from .handlers import (  # noqa: F401
     on_blend_import_post,
     on_depsgraph_update,
     on_frame_change_post,
+    on_load_pre,
     on_load_post,
     on_render_cancel,
     on_render_complete,

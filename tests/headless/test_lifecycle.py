@@ -24,7 +24,7 @@ import achievements as addon
 from common import expect
 
 HANDLER_LISTS = (
-    "depsgraph_update_post", "load_post", "save_post", "render_init",
+    "depsgraph_update_post", "load_pre", "load_post", "save_post", "render_init",
     "render_post", "render_complete", "render_cancel", "frame_change_post",
     "undo_post", "blend_import_post",
 )

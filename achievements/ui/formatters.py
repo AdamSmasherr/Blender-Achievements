@@ -84,8 +84,13 @@ def format_progress_value(value) -> str:
     return f"{number:,}"
 
 
-def format_progress(current, target) -> str:
-    """`12.3M / 1B` — підпис прогрес-бару заблокованої ачивки."""
+def format_progress(current, target, unit="COUNT") -> str:
+    """Format counts or elapsed time without changing the underlying progress."""
+    if unit == 'SECONDS':
+        def duration(value):
+            text = format_duration(value)
+            return "0 min" if text == "—" else text
+        return f"{duration(current)} / {duration(target)}"
     return f"{format_progress_value(current)} / {format_progress_value(target)}"
 
 

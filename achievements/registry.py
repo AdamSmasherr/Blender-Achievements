@@ -80,6 +80,26 @@ class AchievementDefinition:
     counter: Optional[str] = None   # ключ у engine stats; None → звичайна (сесійна)
     threshold: int = 0              # поріг лічильника для розблокування
 
+    # Display metadata lives with the condition, not in a second UI lookup.
+    progress_unit: str = "COUNT"
+    hint: str = ""
+
+    @property
+    def tracking_hint(self) -> str:
+        if self.hint:
+            return self.hint
+        if self.counter == "streak":
+            return "Consecutive calendar days across Blender sessions. Missing a day resets the streak; earned achievements stay unlocked."
+        if self.counter == "distinct_days":
+            return "Different calendar days across Blender sessions. Days do not need to be consecutive."
+        if self.counter == "uptime_seconds":
+            return "Total time with Blender open across sessions, including idle time. Progress is saved automatically."
+        if self.counter == "sculpt_seconds":
+            return "Total time in Sculpt Mode across Blender sessions. Leaving Sculpt Mode pauses this count."
+        if self.counter:
+            return "Cumulative total across all Blender sessions. Progress is saved automatically."
+        return "Complete the condition in the current file. Earned achievements stay unlocked across Blender sessions."
+
     # --- declarative rule, filled in by achievements.rules ---
     trigger: Tuple[str, ...] = ()
     check: Optional[Callable] = None
@@ -120,6 +140,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # --- Category 1: Basics ---
     "GOODBYE_CUBE": AchievementDefinition(
         id="GOODBYE_CUBE",
+        hint="Delete the default cube within 30 seconds of starting Blender. Opening another file starts the window again.",
         title="Goodbye, Cube!",
         description="Delete the default cube within 30 seconds of launching Blender.",
         rare=False,
@@ -127,6 +148,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "RESPECT_THE_CUBE": AchievementDefinition(
         id="RESPECT_THE_CUBE",
+        hint="Use the original Cube in a new or startup file. Do not delete, move, rotate, or scale it before the render finishes.",
         title="Respect the Cube",
         description="Render a scene without deleting or modifying the default cube.",
         rare=True,
@@ -134,6 +156,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "DONUT_MASTER": AchievementDefinition(
         id="DONUT_MASTER",
+        hint="Give a torus a material whose name includes ‘donut’ or ‘glaze’, then finish a render.",
         title="Donut Master",
         description="Render a torus with a glaze material.",
         rare=False,
@@ -141,6 +164,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "SUZANNES_BLESSING": AchievementDefinition(
         id="SUZANNES_BLESSING",
+        hint="Add the built-in Monkey mesh (Suzanne) to the scene.",
         title="Suzanne's Blessing",
         description="Add a monkey mesh (Suzanne) to the scene.",
         rare=False,
@@ -150,13 +174,15 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # --- Category 2: Modeling & Sculpting ---
     "POLYGON_KING": AchievementDefinition(
         id="POLYGON_KING",
+        hint="Reach more than 10,000,000 polygons across the current scene. The progress bar shows the scene total.",
         title="Polygon King",
-        description="Reach over 10,000,000 polygons in a single scene or mesh.",
+        description="Reach over 10,000,000 polygons in a single scene.",
         rare=True,
         category="Modeling & Sculpting",
     ),
     "FATAL_CTRL_J": AchievementDefinition(
         id="FATAL_CTRL_J",
+        hint="Join 100 or more objects in one operation. The bar shows your largest join during this Blender session.",
         title="Frankenstein",
         description="Join over 100 separate objects into a single mesh.",
         rare=True,
@@ -164,6 +190,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "UV_UNWRAPPING_PAIN": AchievementDefinition(
         id="UV_UNWRAPPING_PAIN",
+        hint="Stay in the UV Editing workspace or an active UV Editor for 30 minutes continuously. Leaving both resets the timer.",
         title="Flat Earth",
         description="Work in the UV Editing tab for over 30 minutes straight.",
         rare=False,
@@ -171,6 +198,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "SUBDIV_OVERKILL": AchievementDefinition(
         id="SUBDIV_OVERKILL",
+        hint="Add a mesh after opening the file or enabling the add-on, then set Subdivision Surface viewport or render level to 6 or higher.",
         title="Subdiv Overkill",
         description="Set Subdivision Surface viewport/render level to 6 or higher.",
         rare=False,
@@ -178,6 +206,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "INVERTED_REALITY": AchievementDefinition(
         id="INVERTED_REALITY",
+        hint="Use Recalculate Outside/Inside or Flip in Edit Mode on a mesh.",
         title="Up is Down",
         description="Recalculate or flip inverted normals on a mesh.",
         rare=False,
@@ -185,6 +214,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "KNIFE_MASTER": AchievementDefinition(
         id="KNIFE_MASTER",
+        hint="Make 20 Knife cuts during this Blender session, including across file changes. Restarting Blender or re-enabling the add-on resets the count.",
         title="Surgical Precision",
         description="Make 20 cuts with the Knife tool in one session.",
         rare=False,
@@ -192,6 +222,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "MERGE_MASTER": AchievementDefinition(
         id="MERGE_MASTER",
+        hint="Merge 100 or more vertices in one Merge by Distance operation. The bar shows your largest merge during this Blender session.",
         title="Singularity",
         description="Merge over 100 overlapping vertices using Merge by Distance.",
         rare=False,
@@ -201,13 +232,15 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # --- Category 3: Nodes & Materials ---
     "NODE_SPAGHETTI": AchievementDefinition(
         id="NODE_SPAGHETTI",
+        hint="In a material or node group created after opening the file, connect at least 50 nodes with 49 or more links. The bar counts nodes.",
         title="Node Spaghetti",
-        description="Connect over 50 nodes in Shader or Geometry Nodes.",
+        description="Connect 50 or more nodes in Shader or Geometry Nodes.",
         rare=True,
         category="Nodes & Materials",
     ),
     "PURE_PROCEDURAL": AchievementDefinition(
         id="PURE_PROCEDURAL",
+        hint="Build one material with at least 10 nodes and 8 links, without Image Texture or Environment Texture nodes. Rendering is not required.",
         title="Pure Procedural",
         description="Build a material from 10+ nodes without a single image texture.",
         rare=False,
@@ -215,13 +248,15 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "GEOMETRY_NODES_GURU": AchievementDefinition(
         id="GEOMETRY_NODES_GURU",
+        hint="Put at least 5 Node Group nodes in one Geometry Nodes tree.",
         title="Geometry Nodes Guru",
-        description="Create a node tree with 5+ nested Node Groups.",
+        description="Create a Geometry Nodes tree containing 5 or more Node Group nodes.",
         rare=True,
         category="Nodes & Materials",
     ),
     "MATERIAL_HOARDER": AchievementDefinition(
         id="MATERIAL_HOARDER",
+        hint="Keep at least 30 materials in the current project file.",
         title="Material Hoarder",
         description="Accumulate 30 or more materials in a single project file.",
         rare=False,
@@ -229,13 +264,15 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "SAVED_BY_SHIELD": AchievementDefinition(
         id="SAVED_BY_SHIELD",
+        hint="Enable the Fake User shield on 10 previously unprotected items. Shields that were already on when the file opened do not count.",
         title="Devine Shield",
-        description="Assign Fake User (Shield icon) to 10 unused datablocks.",
+        description="Protect 10 unused data items with Fake User (the shield icon).",
         rare=False,
         category="Nodes & Materials",
     ),
     "EMISSION_OVERDRIVE": AchievementDefinition(
         id="EMISSION_OVERDRIVE",
+        hint="Create the material after opening the file or enabling the add-on, then set an Emission strength above 10,000.",
         title="Flashbang",
         description="Set an Emission node strength above 10,000.",
         rare=False,
@@ -243,6 +280,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "COLOR_RAMP_ADDICT": AchievementDefinition(
         id="COLOR_RAMP_ADDICT",
+        hint="Use at least 5 Color Ramp nodes in one material shader tree.",
         title="Color Ramp Addict",
         description="Use 5 or more Color Ramp nodes in a single shader tree.",
         rare=False,
@@ -252,6 +290,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # --- Category 4: Animation & Physics ---
     "GRAPH_EDITOR_TWEAKER": AchievementDefinition(
         id="GRAPH_EDITOR_TWEAKER",
+        hint="Change interpolation handles for 100 or more keyframes during this Blender session. Restarting Blender or re-enabling the add-on resets the count.",
         title="Graph Editor Tweaker",
         description="Adjust over 100 keyframe interpolation handles in the Graph Editor.",
         rare=False,
@@ -259,6 +298,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "BONE_COLLECTOR": AchievementDefinition(
         id="BONE_COLLECTOR",
+        hint="Create one armature with 100 or more bones after opening the file. Bones in other rigs do not combine with it.",
         title="Exoskeleton",
         description="Build an armature rig containing 100 or more bones.",
         rare=False,
@@ -266,13 +306,15 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "DRIVER_SPECIALIST": AchievementDefinition(
         id="DRIVER_SPECIALIST",
+        hint="Add 5 drivers after opening the file. Drivers that were already present do not count.",
         title="Driver Specialist",
-        description="Create 5 custom Python drivers linking object properties.",
+        description="Create 5 drivers that link object properties with Python expressions.",
         rare=False,
         category="Animation & Physics",
     ),
     "GRAVITY_MASTER": AchievementDefinition(
         id="GRAVITY_MASTER",
+        hint="Run a Rigid Body simulation with more than 100 objects in its collection.",
         title="Domino Effect",
         description="Run a Rigid Body simulation with over 100 objects.",
         rare=True,
@@ -280,6 +322,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "THE_BIG_BAKE": AchievementDefinition(
         id="THE_BIG_BAKE",
+        hint="Bake a fluid, smoke, cloth, soft body, or rigid body simulation for more than 250 frames.",
         title="Let it cook",
         description="Bake a fluid or smoke simulation longer than 250 frames.",
         rare=False,
@@ -287,6 +330,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "PARTICLE_STORM": AchievementDefinition(
         id="PARTICLE_STORM",
+        hint="Create particle settings after opening the file or enabling the add-on, then set one emitter to more than 100,000 particles.",
         title="Particle Storm",
         description="Emit over 100,000 particles from a single emitter setup.",
         rare=False,
@@ -294,6 +338,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "CLOTH_EXPLOSION": AchievementDefinition(
         id="CLOTH_EXPLOSION",
+        hint="During a Cloth simulation, let one vertex move at least 100 Blender units from its starting position.",
         title="Rip and Tear",
         description="Run a Cloth simulation where mesh vertices travel over 100 units away instantly.",
         rare=True,
@@ -303,6 +348,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # --- Category 5: Lighting & Rendering ---
     "NIGHT_SHIFT": AchievementDefinition(
         id="NIGHT_SHIFT",
+        hint="One uninterrupted render must last more than 4 hours. Separate renders are not added together.",
         title="Night Shift",
         description="Keep a render process running for over 4 consecutive hours.",
         rare=True,
@@ -310,6 +356,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "CYCLES_ENTHUSIAST": AchievementDefinition(
         id="CYCLES_ENTHUSIAST",
+        hint="Finish a render in Cycles with more than 10,000 samples. Changing the sample setting alone does not unlock it.",
         title="Cinema Quality",
         description="Finish a render with the sample count set above 10,000.",
         rare=False,
@@ -317,6 +364,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "EEVEE_SPEEDSTER": AchievementDefinition(
         id="EEVEE_SPEEDSTER",
+        hint="Finish at least 100 frames in one animation render before that render reaches one minute.",
         title="Warp Speed",
         description="Render 100+ animation frames in under 1 minute.",
         rare=False,
@@ -324,6 +372,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "VRAM_VICTIM": AchievementDefinition(
         id="VRAM_VICTIM",
+        hint="Finish a render that fails because the GPU runs out of memory.",
         title="Out of Memory",
         description="Trigger a render error due to running out of GPU memory.",
         rare=True,
@@ -334,6 +383,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "SPEED_BLUR": AchievementDefinition(
         id="SPEED_BLUR",
+        hint="Render at least 2 animation frames with Motion Blur enabled.",
         title="Motion Blur",
         description="Render an animation sequence with Motion Blur enabled.",
         rare=False,
@@ -341,6 +391,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "SUN_GOD": AchievementDefinition(
         id="SUN_GOD",
+        hint="Add a Sun light during this session and set its strength above 1,000.",
         title="Now I become death",
         description="Set Sun Light strength to over 1,000.",
         rare=False,
@@ -348,13 +399,15 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "DENOISE_MAGIC": AchievementDefinition(
         id="DENOISE_MAGIC",
+        hint="Finish an image render with fewer than 32 Cycles samples and denoising enabled.",
         title="Denoise Magic",
-        description="Render an image with under 32 samples using AI denoising.",
+        description="Render an image with fewer than 32 samples and denoising enabled.",
         rare=False,
         category="Lighting & Rendering",
     ),
     "ALPHA_TRANSLUCENCY": AchievementDefinition(
         id="ALPHA_TRANSLUCENCY",
+        hint="Finish a render with Render Properties > Film > Transparent enabled.",
         title="Ghost in the Shell",
         description="Render a scene with transparent background enabled.",
         rare=False,
@@ -364,34 +417,39 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # --- Category 6: Workflow & Disasters ---
     "CTRL_Z_HERO": AchievementDefinition(
         id="CTRL_Z_HERO",
+        hint="Make 30 Undo actions within a rolling 60 seconds. Older actions drop out of the bar.",
         title="Time Traveler",
-        description="Undo actions 30+ times in a row within one minute.",
+        description="Undo 30 or more times within one minute.",
         rare=False,
         category="Workflow & Disasters",
     ),
     "THE_SURVIVOR": AchievementDefinition(
         id="THE_SURVIVOR",
+        hint="Open a project through Recover Last Session or Recover Auto Save after a crash.",
         title="Back from the dead",
-        description="Successfully restore a project via Recover Auto Save after a crash.",
+        description="Restore a project with Recover Last Session or Recover Auto Save after a crash.",
         rare=True,
         category="Workflow & Disasters",
     ),
     "LIVING_ON_THE_EDGE": AchievementDefinition(
         id="LIVING_ON_THE_EDGE",
+        hint="Keep unsaved changes for 2 hours. Saving or opening a file restarts the waiting period.",
         title="Living on the Edge",
-        description="Work on a complex scene for over 2 hours without saving (Ctrl+S).",
+        description="Keep unsaved changes for more than 2 hours.",
         rare=False,
         category="Workflow & Disasters",
     ),
     "ADDON_COLLECTOR": AchievementDefinition(
         id="ADDON_COLLECTOR",
+        hint="Enable at least 25 add-ons, including one enabled after opening the file or enabling Achievements.",
         title="Add-on Collector",
-        description="Enable over 25 add-ons in the preferences.",
+        description="Enable 25 or more add-ons in the preferences.",
         rare=False,
         category="Workflow & Disasters",
     ),
     "SHORTCUT_NINJA": AchievementDefinition(
         id="SHORTCUT_NINJA",
+        hint="Use 15 different keyboard shortcuts within a rolling 60 seconds. Repeating one does not add to the count.",
         title="Shortcut Ninja",
         description="Use 15 different keyboard shortcuts within one minute.",
         rare=True,
@@ -399,6 +457,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "APPLY_ALL": AchievementDefinition(
         id="APPLY_ALL",
+        hint="Apply a transform to 20 or more objects during this Blender session. Restarting Blender or re-enabling the add-on resets the count.",
         title="Know your Place",
         description="Apply scale, rotation, and location (Ctrl+A) on 20+ objects in a scene.",
         rare=False,
@@ -406,13 +465,15 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "OUTLINER_CHAOS": AchievementDefinition(
         id="OUTLINER_CHAOS",
+        hint="Create and keep at least 47 auto-named objects (for example, Cube.001). Objects already in the file do not count.",
         title="Outliner Chaos",
-        description="Maintain 47+ auto-named objects (Cube.001, Cube.002) without renaming.",
+        description="Create 47 or more auto-named objects (Cube.001, Cube.002) without renaming them.",
         rare=False,
         category="Workflow & Disasters",
     ),
     "SAVE_BUTTON_MASHER": AchievementDefinition(
         id="SAVE_BUTTON_MASHER",
+        hint="Save manually 50 times during this Blender session, including across file changes. Restarting Blender or re-enabling the add-on resets the count.",
         title="Paranoia",
         description="Save your project manually over 50 times in a single session.",
         rare=False,
@@ -422,6 +483,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # ============================ NEW SESSION ACHIEVEMENTS ============================
     "N_GON_CRIMINAL": AchievementDefinition(
         id="N_GON_CRIMINAL",
+        hint="Create or edit a mesh during this session so one face has 10 or more sides.",
         title="N-gon Criminal",
         description="Create a single face with 10 or more sides.",
         rare=False,
@@ -429,6 +491,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "COMPOSITOR_COOK": AchievementDefinition(
         id="COMPOSITOR_COOK",
+        hint="Add compositor nodes until the tree has at least 10, with at least one added after opening the file.",
         title="Compositor Cook",
         description="Build a compositor node tree with 10 or more nodes.",
         rare=False,
@@ -436,6 +499,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "OUROBOROS": AchievementDefinition(
         id="OUROBOROS",
+        hint="After opening the file, add a driver that points back to the same property and creates a cycle.",
         title="Ouroboros",
         description="Create a driver that references its own property (a cyclic dependency).",
         rare=True,
@@ -443,13 +507,15 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "THE_PURGE": AchievementDefinition(
         id="THE_PURGE",
+        hint="Delete 100 or more objects in one operation. Separate deletions are not added together.",
         title="The Purge",
-        description="Delete 100 or more objects in a single operation.",
+        description="Delete 100 or more objects at once.",
         rare=True,
         category="Workflow & Disasters",
     ),
     "APPEND_ICITIS": AchievementDefinition(
         id="APPEND_ICITIS",
+        hint="Append or link at least one object, material, or node group from another .blend file.",
         title="Append-icitis",
         description="Append or link data from another .blend file.",
         rare=False,
@@ -457,6 +523,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     ),
     "WHAT_AM_I_DOING": AchievementDefinition(
         id="WHAT_AM_I_DOING",
+        hint="Leave Blender without input or scene activity for 4 continuous hours. Keyboard input, scene or frame changes, and renders reset the timer.",
         title="What am I doing?",
         description="Leave Blender running for 4 hours without doing anything.",
         rare=True,
@@ -584,16 +651,19 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # Unemployed — total Blender uptime (seconds)
     "UNEMPLOYED_1": AchievementDefinition(
         id="UNEMPLOYED_1", title="Unemployed I",
+        progress_unit="SECONDS",
         description="Spend 10 hours in Blender in total.",
         category="Milestones", counter="uptime_seconds", threshold=36000,
         icon="Unemployed_I"),
     "UNEMPLOYED_2": AchievementDefinition(
         id="UNEMPLOYED_2", title="Unemployed II",
+        progress_unit="SECONDS",
         description="Spend 100 hours in Blender in total.",
         category="Milestones", counter="uptime_seconds", threshold=360000,
         icon="Unemployed_II"),
     "UNEMPLOYED_3": AchievementDefinition(
         id="UNEMPLOYED_3", title="Unemployed III",
+        progress_unit="SECONDS",
         description="Spend 1,000 hours in Blender in total.",
         rare=True, category="Milestones", counter="uptime_seconds", threshold=3600000,
         icon="Unemployed_III"),
@@ -601,6 +671,7 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # Sculpt Sanctuary — total time in Sculpt Mode (seconds)
     "SCULPT_SANCTUARY": AchievementDefinition(
         id="SCULPT_SANCTUARY", title="Sculpt Sanctuary",
+        progress_unit="SECONDS",
         description="Spend 20 hours in Sculpt Mode in total.",
         category="Milestones", counter="sculpt_seconds", threshold=72000),
 
@@ -624,7 +695,8 @@ ACHIEVEMENTS: Dict[str, AchievementDefinition] = {
     # The Long Haul — a single render longer than 24 hours (event, not counter)
     "THE_LONG_HAUL": AchievementDefinition(
         id="THE_LONG_HAUL", title="The Long Haul",
-        description="Keep a single render running for over 24 hours.",
+        hint="Finish one continuous render lasting at least 24 hours. Separate renders are not added together.",
+        description="Finish a single render lasting at least 24 hours.",
         rare=True, category="Milestones"),
 
     # Live to Die Another Day — total crash recoveries

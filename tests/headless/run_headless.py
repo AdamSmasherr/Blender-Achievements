@@ -27,11 +27,13 @@ import common
 import test_lifecycle
 import test_persistence
 import test_detectors
+import test_browser
 
 
 def main():
     total_failed = 0
     total_failed += common.run_suite("Lifecycle", test_lifecycle.tests())
+    total_failed += common.run_suite("Browser", test_browser.tests())
     total_failed += common.run_suite("Persistence", test_persistence.tests())
     total_failed += common.run_suite("Detectors", test_detectors.tests())
 

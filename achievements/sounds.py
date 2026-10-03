@@ -69,10 +69,10 @@ PRESETS = {
 }
 
 PRESET_ITEMS = (
-    ('STEAM', "Steam", "Steam achievement sounds"),
-    ('XBOX', "Xbox", "Xbox achievement sounds"),
-    ('PS', "PlayStation", "PlayStation achievement sounds"),
-    ('CUSTOM', "Custom", "Use your own custom sound profile"),
+    ('STEAM', "Steam", "Steam animation and achievement sounds"),
+    ('XBOX', "Xbox", "Xbox animation and achievement sounds"),
+    ('PS', "PlayStation", "PlayStation animation and achievement sounds"),
+    ('CUSTOM', "Custom", "Use your own animation and sound profile"),
 )
 
 # аудіо-стан (тримаємо посилання, щоб GC не обірвав відтворення)

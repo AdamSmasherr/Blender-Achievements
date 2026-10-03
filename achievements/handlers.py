@@ -345,6 +345,19 @@ def on_save_post(dummy):
 
 
 @persistent
+def on_load_pre(dummy):
+    """Release the cached toast redraw target before a file is replaced.
+
+    Blender invalidates old ``Area`` RNA wrappers during file loading.  The
+    toast timer may still be alive at that point, so the cache must be cleared
+    before ``load_post`` has a chance to rebuild the new screen state.
+    """
+    with debug.guarded("handlers.py:on_load_pre/toast"):
+        from . import toast
+        toast.reset_for_file_load()
+
+
+@persistent
 def on_load_post(dummy):
     state.launch_time = time.time()
     state.last_save_time = time.time()
@@ -555,6 +568,7 @@ def register_msgbus_subscribers():
 
 _HANDLER_BINDINGS = (
     (on_depsgraph_update, "depsgraph_update_post"),
+    (on_load_pre, "load_pre"),
     (on_load_post, "load_post"),
     (on_save_post, "save_post"),
     (on_render_init, "render_init"),

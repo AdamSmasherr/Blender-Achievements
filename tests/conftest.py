@@ -55,7 +55,7 @@ def _install_bpy_stub():
     bpy.utils = bpy_utils
 
     bpy_handlers = types.ModuleType("bpy.app.handlers")
-    for name in ("depsgraph_update_post", "load_post", "save_post",
+    for name in ("depsgraph_update_post", "load_pre", "load_post", "save_post",
                  "render_init", "render_post", "render_complete", "render_cancel",
                  "frame_change_post", "undo_post", "blend_import_post"):
         setattr(bpy_handlers, name, [])

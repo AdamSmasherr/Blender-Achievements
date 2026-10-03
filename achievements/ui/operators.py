@@ -23,6 +23,37 @@ from .sound_paths import (
 )
 
 
+class ACHIEVEMENT_OT_details(bpy.types.Operator):
+    bl_idname = "achievement.details"
+    bl_label = "Achievement Details"
+    bl_description = "View the full condition, tracking details and progress"
+    bl_options = {'INTERNAL'}
+
+    achievement_id: bpy.props.StringProperty(name="Achievement", options={'HIDDEN'})
+
+    @classmethod
+    def description(cls, context, properties):
+        definition = registry.ACHIEVEMENTS.get(properties.achievement_id)
+        if definition is None:
+            return cls.bl_description
+        return f"{definition.title}\n{definition.description}\n\n{definition.tracking_hint}\n\nClick for details"
+
+    def invoke(self, context, event):
+        if self.achievement_id not in registry.ACHIEVEMENTS:
+            self.report({'WARNING'}, "This achievement is no longer available")
+            return {'CANCELLED'}
+        return context.window_manager.invoke_popup(self, width=420)
+
+    def draw(self, context):
+        from .panels import draw_achievement_details
+        definition = registry.ACHIEVEMENTS.get(self.achievement_id)
+        if definition is not None:
+            draw_achievement_details(self.layout, definition)
+
+    def execute(self, context):
+        return {'FINISHED'}
+
+
 class ACHIEVEMENT_OT_reset_progress(bpy.types.Operator):
     """Erase every unlocked achievement and all cumulative stats."""
     bl_idname = "achievement.reset_progress"
@@ -145,6 +176,7 @@ class ACHIEVEMENT_OT_profile_duplicate(bpy.types.Operator):
             return {'CANCELLED'}
         new = prefs.sound_profiles.add()
         new.name = f"{src.name} Copy"
+        new.animation_style = src.animation_style
         for slot in sounds.SLOTS:
             setattr(new, f"{slot}_sound", getattr(src, f"{slot}_sound", ""))
             setattr(new, f"{slot}_volume", getattr(src, f"{slot}_volume", 1.0))

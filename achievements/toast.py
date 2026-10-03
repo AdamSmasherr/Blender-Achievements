@@ -1855,6 +1855,11 @@ def invalidate_textures():
     звільняє, а наш кеш лишався з мертвими id — blf.draw по такому id мовчки
     не малює нічого, і текст ачивки зникав.
     """
+    # ``load_pre`` clears this before Blender tears down the old screen.  Clear
+    # it again here as a post-load boundary in case a timer tick recreated the
+    # target during the file transition.
+    reset_for_file_load()
+
     global _asset_tex, _mask_tex, _mask_failed
     _asset_tex = {}
     _mask_tex = None
@@ -1867,6 +1872,22 @@ def invalidate_textures():
             t['icon_done'] = False    # перезавантажимо з icon_path
         except Exception as _dbg_err:  # noqa: BLE001
             debug.log("toast.py:invalidate_textures", _dbg_err)
+
+
+def reset_for_file_load():
+    """Drop references to UI areas before Blender replaces the current file.
+
+    ``Area`` RNA wrappers become invalid while ``bpy.ops.wm.open_mainfile``
+    tears down the old screen.  The animation timer can still run during that
+    transition, so retaining ``_last_redraw_area`` would let ``_redraw_all``
+    call ``tag_redraw`` on a freed wrapper.  Keep queued/active toasts intact;
+    ``on_load_post`` will invalidate their GPU resources once the new file is
+    ready.  This is intentionally a small pre-load boundary reset rather than
+    ``remove_handler()``, so a toast already on screen can continue after the
+    file switch.
+    """
+    global _last_redraw_area
+    _last_redraw_area = None
 
 
 def invalidate_fonts():

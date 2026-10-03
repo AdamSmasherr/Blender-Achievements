@@ -110,9 +110,9 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
         description="Play audio chime when unlocking achievements"
     )
     enable_toast: bpy.props.BoolProperty(
-        name="Show Viewport Notifications",
+        name="Show Notifications",
         default=True,
-        description="Show custom GPU achievement notifications in 3D Viewport"
+        description="Show achievement pop-ups in the selected editors"
     )
     toast_duration: bpy.props.FloatProperty(
         name="Notification Duration (seconds)",
@@ -124,10 +124,10 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
 
     # ---- Sound scheme ----
     sound_preset: bpy.props.EnumProperty(
-        name="Sound Preset",
+        name="Notification Style",
         items=sounds.PRESET_ITEMS,
         default='STEAM',
-        description="Which set of achievement sounds to use"
+        description="Choose the notification animation and its matching sounds"
     )
     master_volume: bpy.props.FloatProperty(
         name="Master Volume",
@@ -222,8 +222,8 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
         name="Compact List in Sidebar (N-panel)",
         default=False,
         description=("One line per achievement — small icon, name and progress "
-                     "bar, no description. Fits the whole list in a narrow "
-                     "sidebar. Does not affect the list in these preferences")
+                     "bar. Click a name for its full condition and details. "
+                     "Does not affect the list in these preferences")
     )
     rounded_corners: bpy.props.BoolProperty(
         name="Rounded Card & Icon Corners",
@@ -251,18 +251,14 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
         hint = hdr.row()
         hint.enabled = False
         hint.alignment = 'RIGHT'
-        hint.label(text="change style under Profiles below", icon='INFO')
+        hint.label(text="style selected under Notifications", icon='INFO')
 
         grid = note.grid_flow(row_major=True, columns=2, even_columns=True, align=False)
         for key in toast.STYLE_COLOR_KEYS.get(active_style, ()):
             grid.prop(self, toast.color_prop_name(active_style, key))
 
         actions = note.row(align=True)
-        preview = actions.row(align=True)
-        preview.operator("achievement.test_toast", text="Preview",
-                         icon='PLAY').rare = False
-        preview.operator("achievement.test_toast", text="Preview Rare",
-                         icon='SOLO_ON').rare = True
+        self._draw_previews(actions)
         reset = actions.row(align=True)
         reset.alignment = 'RIGHT'
         reset.operator("achievement.reset_colors", text="Reset",
@@ -300,24 +296,42 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
                            icon='LOOP_BACK').target = 'CALENDAR'
 
     def draw(self, context):
-        """Шість згортних секцій. Відкриті одразу лише Settings і Colours —
-        решта (профілі, скидання прогресу, календар, список ачивок) чекають на
-        клік, і доти нічого не малюють."""
+        """Everyday controls first; detailed customization stays collapsible."""
         layout = self.layout
         style = toast._get_style()
 
-        _hdr, body = _section(layout, "achievements_settings", "Settings",
-                              icon='PREFERENCES', default_closed=False)
+        notifications = layout.box()
+        notifications.label(text="Notifications", icon='PREFERENCES')
+        notifications.row(align=True).prop(self, "sound_preset", expand=True)
+        if self.sound_preset == 'CUSTOM':
+            profile = sounds.get_active_profile(self)
+            if profile is not None:
+                notifications.label(text=f"Profile: {profile.name}")
+                notifications.row(align=True).prop(profile, "animation_style", expand=True)
+            else:
+                notifications.label(text="Add a profile under Sound Files & Profiles", icon='INFO')
+        toggles = notifications.row()
+        toggles.prop(self, "enable_toast")
+        toggles.prop(self, "enable_sound", text="Play Sound")
+        volume = notifications.row()
+        volume.enabled = self.enable_sound
+        volume.prop(self, "master_volume", slider=True)
+        self._draw_previews(notifications)
+        if not self.enable_toast:
+            notifications.label(text="Enable notifications to preview", icon='INFO')
+
+        _hdr, body = _section(layout, "achievements_settings", "Display & Sidebar",
+                              icon='PREFERENCES')
         if body:
             self._draw_settings(body, style)
 
         _hdr, body = _section(layout, "achievements_colours", "Colours",
-                              icon='COLOR', default_closed=False)
+                              icon='COLOR')
         if body:
             self._draw_colors(body, style)
 
         # Export/Import живуть у заголовку, як і раніше жили в рядку назви.
-        header, body = _section(layout, "achievements_profiles", "Profiles",
+        header, body = _section(layout, "achievements_profiles", "Sound Files & Profiles",
                                 icon='SOUND')
         io = header.row(align=True)
         io.alignment = 'RIGHT'
@@ -351,8 +365,6 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
 
     def _draw_settings(self, layout, style):
         col_s = layout.column(align=True)
-        col_s.prop(self, "enable_sound")
-        col_s.prop(self, "enable_toast")
         # Все, що описує саму картку, гасне разом із нею.
         col_toast = col_s.column(align=True)
         col_toast.enabled = self.enable_toast
@@ -376,10 +388,6 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
         col_s.prop(self, "show_calendar_in_sidebar")
 
     def _draw_profiles(self, layout):
-        row_p = layout.row(align=True)
-        row_p.prop(self, "sound_preset", expand=True)
-        layout.prop(self, "master_volume", slider=True)
-
         if not self.enable_sound:
             info = layout.row()
             info.enabled = False
@@ -399,12 +407,17 @@ class ACHIEVEMENT_AddonPreferences(bpy.types.AddonPreferences):
             if profile is None:
                 layout.label(text="Add a profile to define your own animation and sounds.", icon='INFO')
             else:
-                anim = layout.box()
-                anim.label(text="Pop-up Animation:", icon='SEQ_STRIP_DUPLICATE')
-                anim.row().prop(profile, "animation_style", expand=True)
                 _draw_sound_slots_grid(layout, self, profile=profile)
         else:
             _draw_sound_slots_grid(layout, self, profile=None)
+
+    def _draw_previews(self, layout):
+        preview = layout.row(align=True)
+        preview.enabled = self.enable_toast
+        preview.operator("achievement.test_toast", text="Preview",
+                         icon='PLAY').rare = False
+        preview.operator("achievement.test_toast", text="Preview Rare",
+                         icon='SOLO_ON').rare = True
 
     def _draw_progress_data(self, layout):
         """Скидання прогресу живе тільки тут, а не в сайдбарі: дія незворотна,

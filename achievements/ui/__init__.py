@@ -12,6 +12,7 @@ working for existing callers/tests.
 
 import bpy
 
+from .catalog import ACHIEVEMENT_OT_clear_filters, ACHIEVEMENT_PG_browser
 from .calendar import ACHIEVEMENT_OT_day_info, calendar_color, clear_level_icons, describe_day, get_level_icons
 from .formatters import (
     CALENDAR_COLORS,
@@ -33,6 +34,7 @@ from .formatters import (
 from .helpers import _tag_redraw_all, get_preferences
 from .icons import clear_custom_icons, get_custom_icons
 from .operators import (
+    ACHIEVEMENT_OT_details,
     ACHIEVEMENT_OT_preview_sound,
     ACHIEVEMENT_OT_profile_add,
     ACHIEVEMENT_OT_profile_duplicate,
@@ -52,6 +54,7 @@ from .sound_paths import DEFAULT_PROFILE_FILE, _pack_sound_path, _unpack_sound_p
 # (CollectionProperty(type=...) / template_list). Порядок панелей у
 # сайдбарі задає bl_order, а не порядок реєстрації.
 CLASSES = (
+    ACHIEVEMENT_PG_browser,
     ACHIEVEMENT_SoundProfile,
     ACHIEVEMENT_UL_sound_profiles,
     ACHIEVEMENT_AddonPreferences,
@@ -65,6 +68,8 @@ CLASSES = (
     ACHIEVEMENT_OT_preview_sound,
     ACHIEVEMENT_OT_reset_colors,
     ACHIEVEMENT_OT_day_info,
+    ACHIEVEMENT_OT_details,
+    ACHIEVEMENT_OT_clear_filters,
     ACHIEVEMENT_PT_calendar,
     ACHIEVEMENT_PT_panel,
 )
@@ -78,8 +83,14 @@ def register():
             except (ValueError, RuntimeError):
                 pass
 
+    if not hasattr(bpy.types.WindowManager, "achievement_browser"):
+        bpy.types.WindowManager.achievement_browser = bpy.props.PointerProperty(
+            type=ACHIEVEMENT_PG_browser, options={'SKIP_SAVE'})
+
 
 def unregister():
+    if hasattr(bpy.types.WindowManager, "achievement_browser"):
+        del bpy.types.WindowManager.achievement_browser
     clear_custom_icons()
     clear_level_icons()
 
